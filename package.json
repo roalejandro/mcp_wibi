@@ -1,0 +1,28 @@
+{
+  "name": "wibi-mcp-gateway",
+  "version": "0.1.0",
+  "description": "MCP Gateway que conecta Claude con el CRM WIBI (API v2) respetando los permisos del comercio y el aislamiento por campaña.",
+  "type": "module",
+  "main": "dist/server.js",
+  "bin": {
+    "wibi-mcp-gateway": "dist/server.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "dev": "tsc --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.11.0",
+    "fast-xml-parser": "^4.4.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "typescript": "^5.5.0"
+  }
+}
