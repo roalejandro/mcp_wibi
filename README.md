@@ -32,7 +32,7 @@ npm run build
 | `WIBI_PASS` | Clave del comercio |
 | `WIBI_DEFAULT_CAMPANIA` | (Opcional) campaña por defecto si el comercio opera varias |
 
-## Uso con Claude Desktop / Cursor
+## Uso con Agentes
 
 Agregar al archivo de configuración MCP del cliente:
 
