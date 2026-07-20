@@ -11,10 +11,15 @@ export interface WibiConfig {
   defaultCampania?: number;
 }
 
+export interface HttpServerConfig {
+  port: number;
+  token: string;
+}
+
 function required(name: string): string {
   const value = process.env[name];
   if (!value || value.trim() === "") {
-    // stderr: stdout está reservado para el transporte JSON-RPC.
+    // stderr: stdout está reservado para el transporte JSON-RPC en modo stdio.
     console.error(`ERROR: falta la variable de entorno ${name}`);
     process.exit(1);
   }
@@ -33,5 +38,22 @@ export function loadConfig(): WibiConfig {
     pass: required("WIBI_PASS"),
     defaultCampania:
       defaultCampania && !Number.isNaN(defaultCampania) ? defaultCampania : undefined,
+  };
+}
+
+/**
+ * Configuración del transporte HTTP (solo si MCP_TRANSPORT=http).
+ */
+export function loadHttpConfig(): HttpServerConfig {
+  const portRaw = process.env.MCP_HTTP_PORT || "3939";
+  const port = Number(portRaw);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    console.error(`ERROR: MCP_HTTP_PORT inválido: ${portRaw}`);
+    process.exit(1);
+  }
+
+  return {
+    port,
+    token: required("MCP_HTTP_TOKEN"),
   };
 }

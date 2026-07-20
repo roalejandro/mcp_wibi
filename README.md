@@ -31,8 +31,11 @@ npm run build
 | `WIBI_USER` | Usuario del comercio |
 | `WIBI_PASS` | Clave del comercio |
 | `WIBI_DEFAULT_CAMPANIA` | (Opcional) campaña por defecto si el comercio opera varias |
+| `MCP_TRANSPORT` | `stdio` (default, local) o `http` (Docker / remoto) |
+| `MCP_HTTP_PORT` | Puerto HTTP (default `3939`, solo si `MCP_TRANSPORT=http`) |
+| `MCP_HTTP_TOKEN` | Bearer token para autenticar clientes remotos (solo HTTP) |
 
-## Uso con Agentes
+## Uso local con Agentes (stdio)
 
 Agregar al archivo de configuración MCP del cliente:
 
@@ -52,6 +55,65 @@ Agregar al archivo de configuración MCP del cliente:
   }
 }
 ```
+
+## Uso remoto (HTTP + Bearer)
+
+Cuando el gateway corre en Docker detrás de Apache:
+
+```json
+{
+  "mcpServers": {
+    "wibi-team": {
+      "url": "https://wibi.com.ar/mcp",
+      "headers": {
+        "Authorization": "Bearer <MCP_HTTP_TOKEN>"
+      }
+    }
+  }
+}
+```
+
+Notas:
+- Todos los clientes que usen este endpoint remoto operan con la **misma identidad WIBI** (`WIBI_USER`/`WIBI_PASS` del `.env` del servidor). No hay separación por usuario ni comercio.
+- El token se comparte por un canal seguro (no en chats públicos).
+
+## Deploy en producción (Docker + Apache)
+
+### Build y run local con Docker
+
+```bash
+cp .env.example .env   # completar WIBI_* + MCP_HTTP_TOKEN
+# En .env:
+# MCP_TRANSPORT=http
+# MCP_HTTP_PORT=3939
+# MCP_HTTP_TOKEN=<openssl rand -hex 32>
+
+docker compose build
+docker compose up -d
+curl http://127.0.0.1:3939/health
+```
+
+El contenedor escucha en `0.0.0.0:3939` adentro, pero `docker-compose.yml` publica solo `127.0.0.1:3939` en el host.
+
+### Reverse proxy Apache (ejemplo en `wibi.com.ar`)
+
+```apache
+ProxyPreserveHost On
+ProxyPass /mcp http://127.0.0.1:3939/mcp
+ProxyPassReverse /mcp http://127.0.0.1:3939/mcp
+```
+
+Habilitar módulos y recargar:
+
+```bash
+sudo a2enmod proxy proxy_http headers
+sudo apache2ctl configtest
+sudo systemctl reload apache2
+```
+
+Rutas del servicio:
+- `GET /health` — sin autenticación (healthcheck)
+- `POST /mcp` — requiere `Authorization: Bearer <MCP_HTTP_TOKEN>`
 
 ## Herramientas disponibles
 
