@@ -23,6 +23,13 @@ export interface ScopeInfo {
 export interface ScopeSwitcher {
   /** Lista los comercios de una campaña dentro del alcance del actor real de la sesión. */
   listComercios: (idCampania: number) => Promise<ComercioInfo[]>;
+  /**
+   * Busca campañas dentro del alcance del actor real de la sesión, con filtro opcional por
+   * nombre (para encontrar el idCampania sin que el usuario lo conozca de antemano).
+   */
+  listCampanias: (
+    q?: string
+  ) => Promise<{ campanias: CampaniaInfo[]; total: number; truncated: boolean }>;
   /** Cambia el comercio/campaña activos de la sesión y devuelve el nuevo alcance. */
   switchScope: (idCampania: number, idComercio: number) => Promise<ScopeInfo>;
 }
@@ -61,7 +68,7 @@ export function buildMcpServer(client: WibiClient, opts: BuildServerOptions = {}
       {
         title: "Mis campañas",
         description:
-          "Lista las campañas WIBI a las que la sesión actual tiene acceso (id y nombre) y el comercio activo. Usá idCampania en los demás tools si hay más de una. Si `es_admin` es true, podés usar wibi_comercios_de_campania y wibi_cambiar_comercio para operar otro comercio sin volver a iniciar sesión.",
+          "Lista las campañas WIBI a las que la sesión actual tiene acceso (id y nombre) y el comercio activo. Usá idCampania en los demás tools si hay más de una. Si `es_admin` es true, esto solo muestra la campaña del comercio activo (no todo tu alcance de admin): usá wibi_buscar_campanias para encontrar otras campañas por nombre, wibi_comercios_de_campania para ver sus comercios, y wibi_cambiar_comercio para operar otro comercio sin volver a iniciar sesión.",
         inputSchema: {},
       },
       async () =>
@@ -75,7 +82,27 @@ export function buildMcpServer(client: WibiClient, opts: BuildServerOptions = {}
   }
 
   if (opts.actor && opts.scope) {
-    const { listComercios, switchScope } = opts.scope;
+    const { listComercios, listCampanias, switchScope } = opts.scope;
+
+    server.registerTool(
+      "wibi_buscar_campanias",
+      {
+        title: "Buscar campañas",
+        description:
+          "Busca campañas WIBI por nombre dentro de tu alcance de administrador (útil si tenés acceso a muchas y no sabés el idCampania de memoria). Sin `q` devuelve las primeras campañas en orden alfabético. Usalo antes de wibi_comercios_de_campania / wibi_cambiar_comercio para encontrar el idCampania a partir del nombre que te dice el usuario.",
+        inputSchema: {
+          q: z.string().min(1).max(100).optional().describe("Texto a buscar en el nombre de la campaña."),
+        },
+      },
+      async ({ q }) => {
+        try {
+          const { campanias, total, truncated } = await listCampanias(q);
+          return jsonResult({ campanias, total, truncated });
+        } catch (e) {
+          return errorResult(e);
+        }
+      }
+    );
 
     server.registerTool(
       "wibi_comercios_de_campania",

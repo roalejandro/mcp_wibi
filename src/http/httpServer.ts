@@ -530,6 +530,13 @@ export async function startHttpServer(
                 }
                 return result.data.comercios;
               },
+              listCampanias: async (q?: string) => {
+                const result = await auth.misCampanias(accessToken, q);
+                if (result.kind === "error") {
+                  throw new Error(result.message);
+                }
+                return result.data;
+              },
               switchScope: async (idCampania: number, idComercio: number) => {
                 const switched = await auth.switchScope(accessToken, idCampania, idComercio);
                 if (switched.kind !== "ok") {

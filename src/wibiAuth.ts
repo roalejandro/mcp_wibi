@@ -14,6 +14,7 @@
  * POST /onzecrm/v2/auth/refresh
  * POST /onzecrm/v2/auth/revoke
  * POST /onzecrm/v2/auth/my-scoped-comercios (Bearer)
+ * POST /onzecrm/v2/auth/my-campanias        (Bearer)
  * POST /onzecrm/v2/auth/switch-scope        (Bearer)
  */
 
@@ -173,6 +174,32 @@ export class WibiAuthService {
         }))
       : [];
     return { kind: "ok", data: { comercios } };
+  }
+
+  /**
+   * Busca campañas dentro del alcance del actor real de una sesión MCP ya autenticada, con
+   * filtro opcional por nombre. Permite encontrar el idCampania sin que el usuario lo conozca
+   * de antemano (útil sobre todo para superadmins con cientos de campañas).
+   */
+  async misCampanias(
+    accessToken: string,
+    q?: string
+  ): Promise<ApiResult<{ campanias: CampaniaInfo[]; total: number; truncated: boolean }>> {
+    const result = await this.requestJson(
+      "/onzecrm/v2/auth/my-campanias",
+      q ? { q } : {},
+      accessToken
+    );
+    if (result.kind === "error") return result;
+    const campanias = this.mapCampanias(result.data?.campanias);
+    return {
+      kind: "ok",
+      data: {
+        campanias,
+        total: Number(result.data?.total ?? campanias.length),
+        truncated: Boolean(result.data?.truncated),
+      },
+    };
   }
 
   /**
