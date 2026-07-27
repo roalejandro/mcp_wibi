@@ -1,38 +1,87 @@
 import { XMLParser } from "fast-xml-parser";
-import type { WibiConfig } from "./config.js";
+import type { ConnectionConfig, StdioAuthConfig, WibiConfig } from "./config.js";
 
 const AUTH_TIMEOUT_MS = 15_000;
 const REQUEST_TIMEOUT_MS = 30_000;
+const REFRESH_SKEW_MS = 60_000;
+
+export interface TokenBundle {
+  accessToken: string;
+  refreshToken?: string;
+  expiresAtMs: number;
+}
+
+export type TokenRefresher = (refreshToken: string) => Promise<TokenBundle>;
 
 /**
  * Cliente HTTP del API WIBI.
  *
- * - Autentica el comercio en POST /onzecrm/token (XML) y cachea el JWT.
- * - Reusa la misma api-key en cada llamada (el middleware valida que el
- *   claim `apn` del token coincida con el appname de la api-key).
- * - Consume el API v2 JSON en /onzecrm/v2/* con Bearer + api-key.
- * - Reintenta una vez ante expiración/invalidez del token (solo 401).
+ * Modos:
+ *  - stdio: autentica con usuario/clave vía XML /onzecrm/token
+ *  - OAuth/sesión: se construye con un TokenBundle ya emitido + refresher opcional
  */
 export class WibiClient {
   private token: string | null = null;
+  private refreshToken: string | null = null;
   private tokenExpiryMs = 0;
+  private refreshPromise: Promise<void> | null = null;
   private readonly xml = new XMLParser({ ignoreAttributes: true, trimValues: true });
+  private readonly baseUrl: string;
+  private readonly apiKey: string;
+  private readonly timeoutMs: number;
+  private readonly stdioAuth?: StdioAuthConfig;
+  private readonly refresher?: TokenRefresher;
+  private readonly fixedDefaultCampania?: number;
 
-  constructor(private readonly cfg: WibiConfig) {}
+  constructor(
+    cfg: WibiConfig | (ConnectionConfig & { defaultCampania?: number }),
+    options?: {
+      session?: TokenBundle;
+      refresher?: TokenRefresher;
+    }
+  ) {
+    this.baseUrl = cfg.baseUrl.replace(/\/+$/, "");
+    this.apiKey = cfg.apiKey;
+    this.timeoutMs = "timeoutMs" in cfg && cfg.timeoutMs ? cfg.timeoutMs : REQUEST_TIMEOUT_MS;
+    this.fixedDefaultCampania = cfg.defaultCampania;
 
-  /** Resuelve la campaña por defecto configurada (si existe). */
-  get defaultCampania(): number | undefined {
-    return this.cfg.defaultCampania;
+    if ("user" in cfg && cfg.user) {
+      this.stdioAuth = {
+        user: cfg.user,
+        pass: cfg.pass,
+        defaultCampania: cfg.defaultCampania,
+      };
+    }
+
+    if (options?.session) {
+      this.applyBundle(options.session);
+    }
+    this.refresher = options?.refresher;
   }
 
-  private buildAuthXml(): string {
+  get defaultCampania(): number | undefined {
+    return this.fixedDefaultCampania ?? this.stdioAuth?.defaultCampania;
+  }
+
+  /** Actualiza tokens de sesión (p. ej. tras un refresh OAuth externo). */
+  setSession(bundle: TokenBundle): void {
+    this.applyBundle(bundle);
+  }
+
+  private applyBundle(bundle: TokenBundle): void {
+    this.token = bundle.accessToken;
+    this.refreshToken = bundle.refreshToken ?? null;
+    this.tokenExpiryMs = bundle.expiresAtMs;
+  }
+
+  private buildAuthXml(user: string, pass: string): string {
     const esc = (s: string) =>
       s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     return (
       '<?xml version="1.0" encoding="utf-8"?>' +
       "<MensajeFidelyGb><auth>" +
-      `<user>${esc(this.cfg.user)}</user>` +
-      `<pass>${esc(this.cfg.pass)}</pass>` +
+      `<user>${esc(user)}</user>` +
+      `<pass>${esc(pass)}</pass>` +
       "</auth></MensajeFidelyGb>"
     );
   }
@@ -40,22 +89,23 @@ export class WibiClient {
   private fetchWithTimeout(url: string, init: RequestInit, ms: number): Promise<Response> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), ms);
-    return fetch(url, { ...init, signal: controller.signal }).finally(() =>
-      clearTimeout(timer)
-    );
+    return fetch(url, { ...init, signal: controller.signal }).finally(() => clearTimeout(timer));
   }
 
-  /** Obtiene (o renueva) el JWT del comercio. */
-  private async authenticate(): Promise<void> {
+  private async authenticateStdio(): Promise<void> {
+    if (!this.stdioAuth) {
+      throw new Error("Sesión WIBI no disponible: falta autenticación");
+    }
+
     const res = await this.fetchWithTimeout(
-      `${this.cfg.baseUrl}/onzecrm/token`,
+      `${this.baseUrl}/onzecrm/token`,
       {
         method: "POST",
         headers: {
-          "api-key": this.cfg.apiKey,
+          "api-key": this.apiKey,
           "Content-Type": "application/xml",
         },
-        body: this.buildAuthXml(),
+        body: this.buildAuthXml(this.stdioAuth.user, this.stdioAuth.pass),
       },
       AUTH_TIMEOUT_MS
     );
@@ -74,16 +124,47 @@ export class WibiClient {
     this.tokenExpiryMs = Date.now() + 8 * 60 * 1000;
   }
 
-  private async ensureToken(): Promise<string> {
-    if (!this.token || Date.now() >= this.tokenExpiryMs) {
-      await this.authenticate();
+  private async refreshSession(): Promise<void> {
+    if (!this.refreshToken || !this.refresher) {
+      if (this.stdioAuth) {
+        await this.authenticateStdio();
+        return;
+      }
+      throw new Error("Sesión WIBI expirada. Volvé a iniciar sesión.");
     }
+
+    const bundle = await this.refresher(this.refreshToken);
+    this.applyBundle(bundle);
+  }
+
+  private async ensureToken(): Promise<string> {
+    const needsRefresh =
+      !this.token || Date.now() >= this.tokenExpiryMs - REFRESH_SKEW_MS;
+
+    if (!needsRefresh) {
+      return this.token as string;
+    }
+
+    if (!this.refreshPromise) {
+      this.refreshPromise = (async () => {
+        try {
+          if (this.refreshToken && this.refresher) {
+            await this.refreshSession();
+          } else if (this.stdioAuth) {
+            await this.authenticateStdio();
+          } else {
+            throw new Error("Sesión WIBI expirada. Volvé a iniciar sesión.");
+          }
+        } finally {
+          this.refreshPromise = null;
+        }
+      })();
+    }
+
+    await this.refreshPromise;
     return this.token as string;
   }
 
-  /**
-   * Realiza una llamada al API v2. Reintenta una vez si el token expiró (401).
-   */
   private async request<T>(
     method: "GET" | "POST",
     path: string,
@@ -92,7 +173,7 @@ export class WibiClient {
   ): Promise<T> {
     const token = await this.ensureToken();
 
-    const url = new URL(`${this.cfg.baseUrl}/onzecrm/v2/${path.replace(/^\//, "")}`);
+    const url = new URL(`${this.baseUrl}/onzecrm/v2/${path.replace(/^\//, "")}`);
     if (options.query) {
       for (const [key, value] of Object.entries(options.query)) {
         if (value !== undefined && value !== null && value !== "") {
@@ -107,13 +188,13 @@ export class WibiClient {
         method,
         headers: {
           Authorization: `Bearer ${token}`,
-          "api-key": this.cfg.apiKey,
+          "api-key": this.apiKey,
           Accept: "application/json",
           ...(options.body ? { "Content-Type": "application/json" } : {}),
         },
         body: options.body ? JSON.stringify(options.body) : undefined,
       },
-      REQUEST_TIMEOUT_MS
+      this.timeoutMs
     );
 
     if (res.status === 401 && !isRetry) {

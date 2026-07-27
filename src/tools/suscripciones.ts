@@ -26,6 +26,7 @@ const idCampania = z
 
 /**
  * Herramientas de Fase 2: Suscripciones.
+ * idCampania siempre viaja por query string (requerimiento API v2).
  */
 export function registerSuscripcionesTools(server: McpServer, client: WibiClient): void {
   server.registerTool(
@@ -44,12 +45,15 @@ export function registerSuscripcionesTools(server: McpServer, client: WibiClient
     },
     async (args) => {
       try {
-        const data = await client.post("suscripciones/tipos-alerta", {
-          ...campaniaParam(client, args.idCampania),
-          nombre: args.nombre,
-          diferenciaDias: args.diferenciaDias,
-          activo: args.activo,
-        });
+        const data = await client.post(
+          "suscripciones/tipos-alerta",
+          {
+            nombre: args.nombre,
+            diferenciaDias: args.diferenciaDias,
+            activo: args.activo,
+          },
+          campaniaParam(client, args.idCampania)
+        );
         return jsonResult(data);
       } catch (e) {
         return errorResult(e);
@@ -62,10 +66,11 @@ export function registerSuscripcionesTools(server: McpServer, client: WibiClient
     {
       title: "Crear suscripción",
       description:
-        "Crea una suscripción para un cliente (día del mes y productos opcionales). Valida que el cliente pertenezca a la campaña.",
+        "Crea una suscripción para un cliente (día del mes, tipo de alerta y productos opcionales). Valida cliente y tipo de alerta del comercio.",
       inputSchema: {
         idCampania,
         idCliente: z.number().int().positive(),
+        idTipoAlerta: z.number().int().positive(),
         dia: z.number().int().min(1).max(31),
         activo: z.boolean().optional(),
         notas: z.string().optional(),
@@ -82,14 +87,18 @@ export function registerSuscripcionesTools(server: McpServer, client: WibiClient
     },
     async (args) => {
       try {
-        const data = await client.post("suscripciones", {
-          ...campaniaParam(client, args.idCampania),
-          idCliente: args.idCliente,
-          dia: args.dia,
-          activo: args.activo,
-          notas: args.notas,
-          productos: args.productos ?? [],
-        });
+        const data = await client.post(
+          "suscripciones",
+          {
+            idCliente: args.idCliente,
+            idTipoAlerta: args.idTipoAlerta,
+            dia: args.dia,
+            activo: args.activo,
+            notas: args.notas,
+            productos: args.productos ?? [],
+          },
+          campaniaParam(client, args.idCampania)
+        );
         return jsonResult(data);
       } catch (e) {
         return errorResult(e);
@@ -101,7 +110,7 @@ export function registerSuscripcionesTools(server: McpServer, client: WibiClient
     "wibi_consultar_suscripciones",
     {
       title: "Consultar suscripciones",
-      description: "Lista las suscripciones de la campaña del comercio.",
+      description: "Lista las suscripciones del comercio autenticado.",
       inputSchema: { idCampania },
       annotations: READONLY,
     },

@@ -22,14 +22,13 @@ export function errorResult(error: unknown) {
 }
 
 /**
- * Construye el parámetro IdCampania a enviar: usa el provisto por el modelo
- * o, si no, el configurado por defecto. Si no hay ninguno, deja que el API
- * resuelva la campaña única del comercio.
+ * Construye el query param idCampania (minúscula, como espera Laravel).
+ * Usa el valor del modelo o el default del cliente.
  */
 export function campaniaParam(
   client: WibiClient,
   idCampania?: number
 ): Record<string, unknown> {
   const value = idCampania ?? client.defaultCampania;
-  return value ? { IdCampania: value } : {};
+  return value ? { idCampania: value } : {};
 }

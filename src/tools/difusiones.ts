@@ -26,6 +26,7 @@ const idCampania = z
 
 /**
  * Herramientas de Fase 2: Difusiones.
+ * idCampania siempre viaja por query string (requerimiento API v2).
  */
 export function registerDifusionesTools(server: McpServer, client: WibiClient): void {
   server.registerTool(
@@ -33,7 +34,7 @@ export function registerDifusionesTools(server: McpServer, client: WibiClient): 
     {
       title: "Asignar tags a clientes",
       description:
-        "Asigna una o más etiquetas (tags) a una lista de clientes. Valida que tags y clientes pertenezcan a la campaña.",
+        "Asigna una o más etiquetas (tags) a una lista de clientes. Valida que tags y clientes pertenezcan a la campaña/comercio.",
       inputSchema: {
         idCampania,
         idClientes: z.array(z.number().int().positive()).min(1),
@@ -43,11 +44,14 @@ export function registerDifusionesTools(server: McpServer, client: WibiClient): 
     },
     async (args) => {
       try {
-        const data = await client.post("difusiones/tags", {
-          ...campaniaParam(client, args.idCampania),
-          idClientes: args.idClientes,
-          idTags: args.idTags,
-        });
+        const data = await client.post(
+          "difusiones/tags",
+          {
+            idClientes: args.idClientes,
+            idTags: args.idTags,
+          },
+          campaniaParam(client, args.idCampania)
+        );
         return jsonResult(data);
       } catch (e) {
         return errorResult(e);
@@ -75,46 +79,19 @@ export function registerDifusionesTools(server: McpServer, client: WibiClient): 
     },
     async (args) => {
       try {
-        const data = await client.post("difusiones/plantillas/whatsapp", {
-          ...campaniaParam(client, args.idCampania),
-          nombre: args.nombre,
-          idPlantilla: args.idPlantilla,
-          idMetaCloudApi: args.idMetaCloudApi,
-          idioma: args.idioma,
-          categoria: args.categoria,
-          encabezado: args.encabezado,
-          estado: args.estado,
-        });
-        return jsonResult(data);
-      } catch (e) {
-        return errorResult(e);
-      }
-    }
-  );
-
-  server.registerTool(
-    "wibi_crear_plantilla_email",
-    {
-      title: "Crear plantilla de email",
-      description: "Crea una plantilla de email (asunto + contenido HTML/texto) en la campaña.",
-      inputSchema: {
-        idCampania,
-        nombre: z.string().min(1),
-        asunto: z.string().min(1),
-        contenidoHTML: z.string().optional(),
-        contenidoTexto: z.string().optional(),
-      },
-      annotations: WRITE,
-    },
-    async (args) => {
-      try {
-        const data = await client.post("difusiones/plantillas/email", {
-          ...campaniaParam(client, args.idCampania),
-          nombre: args.nombre,
-          asunto: args.asunto,
-          contenidoHTML: args.contenidoHTML,
-          contenidoTexto: args.contenidoTexto,
-        });
+        const data = await client.post(
+          "difusiones/plantillas/whatsapp",
+          {
+            nombre: args.nombre,
+            idPlantilla: args.idPlantilla,
+            idMetaCloudApi: args.idMetaCloudApi,
+            idioma: args.idioma,
+            categoria: args.categoria,
+            encabezado: args.encabezado,
+            estado: args.estado,
+          },
+          campaniaParam(client, args.idCampania)
+        );
         return jsonResult(data);
       } catch (e) {
         return errorResult(e);
@@ -127,7 +104,7 @@ export function registerDifusionesTools(server: McpServer, client: WibiClient): 
     {
       title: "Programar difusión",
       description:
-        "Programa una difusión (cabecera + destinatarios) para una fecha/hora. Valida que los clientes pertenezcan a la campaña.",
+        "Programa una difusión (cabecera + destinatarios) para una fecha/hora. Valida que los clientes pertenezcan al comercio.",
       inputSchema: {
         idCampania,
         nombre: z.string().min(1),
@@ -138,12 +115,15 @@ export function registerDifusionesTools(server: McpServer, client: WibiClient): 
     },
     async (args) => {
       try {
-        const data = await client.post("difusiones", {
-          ...campaniaParam(client, args.idCampania),
-          nombre: args.nombre,
-          fechaHora: args.fechaHora,
-          idClientes: args.idClientes ?? [],
-        });
+        const data = await client.post(
+          "difusiones",
+          {
+            nombre: args.nombre,
+            fechaHora: args.fechaHora,
+            idClientes: args.idClientes ?? [],
+          },
+          campaniaParam(client, args.idCampania)
+        );
         return jsonResult(data);
       } catch (e) {
         return errorResult(e);

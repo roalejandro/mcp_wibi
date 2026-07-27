@@ -7,17 +7,20 @@ services:
       - .env
     environment:
       MCP_TRANSPORT: http
-      MCP_HTTP_PORT: "3939"
+      WIBI_HTTP_PORT: "3939"
     # Solo accesible desde el host (Apache reverse proxy). No exponer a internet.
     ports:
       - "127.0.0.1:3939:3939"
+    # Una sola réplica: el estado OAuth/MCP vive en memoria del proceso.
+    deploy:
+      replicas: 1
     healthcheck:
       test:
         [
           "CMD",
           "node",
           "-e",
-          "fetch('http://127.0.0.1:3939/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+          "fetch('http://127.0.0.1:3939/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
         ]
       interval: 30s
       timeout: 5s
