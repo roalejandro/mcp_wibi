@@ -124,7 +124,7 @@ docker compose up -d --build
 curl http://127.0.0.1:3939/healthz
 ```
 
-### DNS / certificado (pendiente jefe — DonWeb)
+### DNS / certificado
 
 **Acción requerida (Quien tenga acceso DonWeb):** crear registro DNS:
 
