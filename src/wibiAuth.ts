@@ -177,17 +177,29 @@ export class WibiAuthService {
   }
 
   /**
-   * Busca campañas dentro del alcance del actor real de una sesión MCP ya autenticada, con
-   * filtro opcional por nombre. Permite encontrar el idCampania sin que el usuario lo conozca
-   * de antemano (útil sobre todo para superadmins con cientos de campañas).
+   * Lista / busca campañas del alcance del actor (admin) de una sesión MCP ya autenticada.
+   * Sin `q` lista todas (paginado). Con `q` filtra por nombre.
    */
   async misCampanias(
     accessToken: string,
-    q?: string
-  ): Promise<ApiResult<{ campanias: CampaniaInfo[]; total: number; truncated: boolean }>> {
+    opts: { q?: string; page?: number; perPage?: number } = {}
+  ): Promise<
+    ApiResult<{
+      campanias: CampaniaInfo[];
+      total: number;
+      page: number;
+      perPage: number;
+      hasMore: boolean;
+    }>
+  > {
+    const body: Record<string, string | number> = {};
+    if (opts.q) body.q = opts.q;
+    if (opts.page) body.page = opts.page;
+    if (opts.perPage) body.perPage = opts.perPage;
+
     const result = await this.requestJson(
       "/onzecrm/v2/auth/my-campanias",
-      q ? { q } : {},
+      body,
       accessToken
     );
     if (result.kind === "error") return result;
@@ -197,7 +209,9 @@ export class WibiAuthService {
       data: {
         campanias,
         total: Number(result.data?.total ?? campanias.length),
-        truncated: Boolean(result.data?.truncated),
+        page: Number(result.data?.page ?? 1),
+        perPage: Number(result.data?.perPage ?? campanias.length),
+        hasMore: Boolean(result.data?.hasMore),
       },
     };
   }

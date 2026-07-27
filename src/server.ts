@@ -27,9 +27,17 @@ export interface ScopeSwitcher {
    * Busca campañas dentro del alcance del actor real de la sesión, con filtro opcional por
    * nombre (para encontrar el idCampania sin que el usuario lo conozca de antemano).
    */
-  listCampanias: (
-    q?: string
-  ) => Promise<{ campanias: CampaniaInfo[]; total: number; truncated: boolean }>;
+  listCampanias: (opts?: {
+    q?: string;
+    page?: number;
+    perPage?: number;
+  }) => Promise<{
+    campanias: CampaniaInfo[];
+    total: number;
+    page: number;
+    perPage: number;
+    hasMore: boolean;
+  }>;
   /** Cambia el comercio/campaña activos de la sesión y devuelve el nuevo alcance. */
   switchScope: (idCampania: number, idComercio: number) => Promise<ScopeInfo>;
 }
@@ -87,17 +95,35 @@ export function buildMcpServer(client: WibiClient, opts: BuildServerOptions = {}
     server.registerTool(
       "wibi_buscar_campanias",
       {
-        title: "Buscar campañas",
+        title: "Listar / buscar campañas del admin",
         description:
-          "Busca campañas WIBI por nombre dentro de tu alcance de administrador (útil si tenés acceso a muchas y no sabés el idCampania de memoria). Sin `q` devuelve las primeras campañas en orden alfabético. Usalo antes de wibi_comercios_de_campania / wibi_cambiar_comercio para encontrar el idCampania a partir del nombre que te dice el usuario.",
+          "Lista TODAS las campañas WIBI del alcance del administrador (no solo la del comercio activo). Sin `q` lista en páginas (por defecto 100). Con `q` filtra por nombre. Si `hasMore` es true, pedí la página siguiente. Usalo cuando el usuario diga 'pasame las campañas', 'quiero cambiar de campaña' o dé un nombre parcial. Después usá wibi_comercios_de_campania y wibi_cambiar_comercio.",
         inputSchema: {
-          q: z.string().min(1).max(100).optional().describe("Texto a buscar en el nombre de la campaña."),
+          q: z
+            .string()
+            .min(1)
+            .max(100)
+            .optional()
+            .describe("Filtro opcional por nombre. Omitilo para listar todas."),
+          page: z
+            .number()
+            .int()
+            .positive()
+            .optional()
+            .describe("Página (default 1)."),
+          perPage: z
+            .number()
+            .int()
+            .positive()
+            .max(200)
+            .optional()
+            .describe("Cantidad por página (default 100, máx 200)."),
         },
       },
-      async ({ q }) => {
+      async ({ q, page, perPage }) => {
         try {
-          const { campanias, total, truncated } = await listCampanias(q);
-          return jsonResult({ campanias, total, truncated });
+          const result = await listCampanias({ q, page, perPage });
+          return jsonResult(result);
         } catch (e) {
           return errorResult(e);
         }

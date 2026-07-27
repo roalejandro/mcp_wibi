@@ -535,8 +535,12 @@ export async function startHttpServer(
                 }
                 return result.data.comercios;
               },
-              listCampanias: async (q?: string) => {
-                const result = await auth.misCampanias(livingSession.wibiToken, q);
+              listCampanias: async (opts?: {
+                q?: string;
+                page?: number;
+                perPage?: number;
+              }) => {
+                const result = await auth.misCampanias(livingSession.wibiToken, opts);
                 if (result.kind === "error") {
                   throw new Error(result.message);
                 }
