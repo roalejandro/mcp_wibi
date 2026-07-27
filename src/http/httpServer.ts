@@ -21,7 +21,13 @@ import { WibiClient } from "../wibiClient.js";
 import { buildMcpServer } from "../server.js";
 import { VERSION } from "../version.js";
 import { InMemoryOAuthProvider } from "./oauthProvider.js";
-import { renderLoginPage } from "./loginPage.js";
+import {
+  renderLoginPage,
+  renderOtpPage,
+  renderSelectScopePage,
+  type OAuthFormParams,
+} from "./loginPage.js";
+import type { CampaniaInfo, SignInResult } from "../wibiAuth.js";
 
 interface BoundTransport {
   transport: StreamableHTTPServerTransport;
@@ -35,6 +41,101 @@ function errorPage(message: string): string {
 <style>body{font-family:system-ui,sans-serif;background:#0f172a;color:#e2e8f0;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}
 .card{background:#1e293b;padding:32px;border-radius:12px;max-width:360px;text-align:center}</style></head>
 <body><div class="card"><h1>No autorizado</h1><p>${message}</p></div></body></html>`;
+}
+
+function oauthFromBody(body: Record<string, string | undefined>): OAuthFormParams {
+  return {
+    auth_request_id: (body.auth_request_id ?? "").trim(),
+    client_id: body.client_id ?? "",
+    redirect_uri: body.redirect_uri ?? "",
+    code_challenge: body.code_challenge ?? "",
+    scope: body.scope,
+    state: body.state,
+    resource: body.resource,
+  };
+}
+
+function parseCampaniasJson(raw: string | undefined): CampaniaInfo[] {
+  const text = (raw ?? "").trim();
+  if (!text) return [];
+  try {
+    const parsed = JSON.parse(text);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map((c: any) => ({
+      idCampania: Number(c.idCampania),
+      nombre: String(c.nombre ?? ""),
+    }));
+  } catch {
+    return [];
+  }
+}
+
+function renderAuthStep(
+  res: Response,
+  result: SignInResult,
+  oauth: OAuthFormParams,
+  fallback: {
+    status?: number;
+    otpPendingId?: string;
+    pendingId?: string;
+    campanias?: CampaniaInfo[];
+    actorName?: string;
+    selectedCampania?: number;
+  } = {}
+): boolean {
+  if (result.kind === "needs_otp") {
+    renderOtpPage(res, {
+      oauth,
+      otpPendingId: result.otpPendingId,
+      message: result.message,
+    });
+    return true;
+  }
+  if (result.kind === "needs_selection") {
+    renderSelectScopePage(res, {
+      oauth,
+      pendingId: result.pendingId,
+      campanias: result.campanias,
+      actorName: result.actor?.nombre,
+    });
+    return true;
+  }
+  if (result.kind === "error") {
+    if (fallback.otpPendingId) {
+      renderOtpPage(
+        res,
+        {
+          oauth,
+          otpPendingId: fallback.otpPendingId,
+          error: result.message,
+        },
+        fallback.status ?? 401
+      );
+      return true;
+    }
+    if (fallback.pendingId) {
+      renderSelectScopePage(
+        res,
+        {
+          oauth,
+          pendingId: fallback.pendingId,
+          campanias: fallback.campanias ?? [],
+          actorName: fallback.actorName,
+          selectedCampania: fallback.selectedCampania,
+          error: result.message,
+        },
+        fallback.status ?? 403
+      );
+      return true;
+    }
+    renderLoginPage(
+      res,
+      { oauth, error: result.message },
+      fallback.status ?? 401
+    );
+    return true;
+  }
+  return false;
 }
 
 export async function startHttpServer(
@@ -105,39 +206,169 @@ export async function startHttpServer(
     express.urlencoded({ extended: false, limit: "16kb" }),
     async (req: Request, res: Response) => {
       const body = req.body as Record<string, string | undefined>;
-      const authRequestId = (body.auth_request_id ?? "").trim();
+      const oauth = oauthFromBody(body);
+      const authRequestId = oauth.auth_request_id ?? "";
       if (!authRequestId) {
         res.status(400).type("html").send(errorPage("Solicitud de autorización inválida."));
         return;
       }
 
-      const result = await auth.signInWithCredentials(body.user ?? "", body.password ?? "");
-      if (result.kind === "error") {
-        renderLoginPage(
-          res,
-          {
-            oauth: {
-              auth_request_id: authRequestId,
-              client_id: body.client_id ?? "",
-              redirect_uri: body.redirect_uri ?? "",
-              code_challenge: body.code_challenge ?? "",
-              scope: body.scope,
-              state: body.state,
-              resource: body.resource,
-            },
-            error: result.message,
-          },
-          401
-        );
-        return;
-      }
+      const step = (body.step ?? "credentials").trim();
+      const action = (body.action ?? "").trim();
 
       try {
-        const redirectTo = provider.completeAuthorization({
-          authRequestId,
-          session: result.session,
-        });
-        res.redirect(302, redirectTo);
+        // --- OTP: reenvío (no consume auth_request_id) ---
+        if (step === "otp" && action === "resend_otp") {
+          const otpPendingId = (body.otp_pending_id ?? "").trim();
+          if (!otpPendingId) {
+            renderLoginPage(res, { oauth, error: "Sesión de verificación inválida." }, 400);
+            return;
+          }
+          const resent = await auth.resendOtp(otpPendingId);
+          if (resent.kind === "error") {
+            renderOtpPage(res, { oauth, otpPendingId, error: resent.message }, 429);
+            return;
+          }
+          renderOtpPage(res, {
+            oauth,
+            otpPendingId,
+            message: resent.data.message,
+          });
+          return;
+        }
+
+        // --- OTP: verificación ---
+        if (step === "otp") {
+          const otpPendingId = (body.otp_pending_id ?? "").trim();
+          const codigo = (body.codigo ?? "").trim();
+          if (!otpPendingId || !codigo) {
+            renderOtpPage(
+              res,
+              {
+                oauth,
+                otpPendingId: otpPendingId || "invalid",
+                error: "Ingresá el código de verificación.",
+              },
+              400
+            );
+            return;
+          }
+          const result = await auth.verifyOtp(otpPendingId, codigo);
+          if (renderAuthStep(res, result, oauth, { otpPendingId })) {
+            return;
+          }
+          if (result.kind === "ok") {
+            const redirectTo = provider.completeAuthorization({
+              authRequestId,
+              session: result.session,
+            });
+            res.redirect(302, redirectTo);
+          }
+          return;
+        }
+
+        // --- Selección: cargar comercios de una campaña ---
+        if (step === "select" && action === "load_comercios") {
+          const pendingId = (body.pending_id ?? "").trim();
+          const idCampania = Number(body.idCampania ?? 0);
+          const campanias = parseCampaniasJson(body.campanias_json);
+
+          if (!pendingId || !idCampania) {
+            renderSelectScopePage(
+              res,
+              {
+                oauth,
+                pendingId: pendingId || "invalid",
+                campanias,
+                error: "Seleccioná una campaña.",
+              },
+              400
+            );
+            return;
+          }
+
+          const listed = await auth.listScopedComercios(pendingId, idCampania);
+          if (listed.kind === "error") {
+            renderSelectScopePage(
+              res,
+              {
+                oauth,
+                pendingId,
+                campanias,
+                selectedCampania: idCampania,
+                error: listed.message,
+              },
+              403
+            );
+            return;
+          }
+
+          renderSelectScopePage(res, {
+            oauth,
+            pendingId,
+            campanias,
+            selectedCampania: idCampania,
+            comercios: listed.data.comercios,
+            actorName: body.actor_name,
+          });
+          return;
+        }
+
+        // --- Selección final: emitir tokens como comercio ---
+        if (step === "select") {
+          const pendingId = (body.pending_id ?? "").trim();
+          const idCampania = Number(body.idCampania ?? 0);
+          const idComercio = Number(body.idComercio ?? 0);
+          const campanias = parseCampaniasJson(body.campanias_json);
+          if (!pendingId || !idCampania || !idComercio) {
+            renderSelectScopePage(
+              res,
+              {
+                oauth,
+                pendingId: pendingId || "invalid",
+                campanias,
+                selectedCampania: idCampania || undefined,
+                actorName: body.actor_name,
+                error: "Seleccioná campaña y comercio.",
+              },
+              400
+            );
+            return;
+          }
+
+          const result = await auth.selectScope(pendingId, idCampania, idComercio);
+          if (renderAuthStep(res, result, oauth, {
+            pendingId,
+            campanias,
+            selectedCampania: idCampania,
+            actorName: body.actor_name,
+          })) {
+            return;
+          }
+          if (result.kind === "ok") {
+            const redirectTo = provider.completeAuthorization({
+              authRequestId,
+              session: result.session,
+            });
+            res.redirect(302, redirectTo);
+          }
+          return;
+        }
+
+        // --- Credenciales (comercio o admin) ---
+        const result = await auth.signInWithCredentials(body.user ?? "", body.password ?? "");
+        if (renderAuthStep(res, result, oauth)) {
+          // needs_otp / needs_selection / error: no consumir auth_request_id
+          return;
+        }
+
+        if (result.kind === "ok") {
+          const redirectTo = provider.completeAuthorization({
+            authRequestId,
+            session: result.session,
+          });
+          res.redirect(302, redirectTo);
+        }
       } catch (err) {
         res
           .status(400)
@@ -232,8 +463,12 @@ export async function startHttpServer(
             },
             refresher: async (refreshToken) => {
               const refreshed = await auth.refresh(refreshToken);
-              if (refreshed.kind === "error") {
-                throw new Error(refreshed.message);
+              if (refreshed.kind !== "ok") {
+                throw new Error(
+                  refreshed.kind === "error"
+                    ? refreshed.message
+                    : "No se pudo renovar la sesión WIBI."
+                );
               }
               livingSession.wibiToken = refreshed.session.wibiToken;
               livingSession.refreshToken = refreshed.session.refreshToken;

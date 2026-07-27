@@ -6,7 +6,7 @@ Soporta dos modos:
 
 | Modo | Para quién | Cómo se autentica |
 |---|---|---|
-| **HTTP + OAuth 2.1** (producción) | Comercios WIBI no técnicos vía **claude.ai / Claude Desktop** | Pantalla de login con usuario/clave del comercio |
+| **HTTP + OAuth 2.1** (producción) | Comercios o admins del panel WIBI vía **claude.ai / Claude Desktop** | Login con usuario/clave de **comercio** o de **admin del panel**; los admins eligen campaña/comercio (y OTP si el 2FA está activo) |
 | **stdio** (desarrollo) | Equipo técnico / Cursor local | Variables `WIBI_USER` / `WIBI_PASS` en el entorno |
 
 ---
@@ -21,13 +21,15 @@ No hace falta ser desarrollador ni editar archivos JSON.
 2. Andá a **Settings → Connectors → Add custom connector**.
 3. Pegá la URL del servidor: `https://wibi.com.ar/mcp` *(URL temporal de prueba; ver nota DNS abajo)*.
 4. Claude abre la pantalla de login de WIBI en el navegador.
-5. Ingresá el **usuario y la contraseña de tu comercio WIBI** (los mismos que usás en el sistema).
+5. Ingresá el **usuario y la contraseña WIBI**:
+   - **Comercio:** los mismos datos del comercio en el sistema → acceso directo.
+   - **Admin del panel:** usuario del panel WIBI (no el del comercio). Si la campaña tiene 2FA, te pide el código del email. Después elegís **campaña** y **comercio** con el mismo alcance que en el panel (admin ve sus campañas/comercios; superadmin ve todas).
 6. Autorizá. Ya podés pedirle a Claude cosas como:
    - “Listame los productos de mi campaña”
    - “Buscá el cliente con DNI …”
    - “¿Cuáles son mis campañas?”
 
-Cada comercio ve **solo sus datos**. No hay tokens compartidos ni configuración por cliente.
+Cada sesión opera **solo sobre el comercio elegido**. No hay tokens compartidos ni configuración por cliente.
 
 ### Claude Desktop
 
@@ -96,7 +98,7 @@ Variables mínimas:
 | `MCP_TRANSPORT` | `http` |
 | `WIBI_HTTP_PORT` | Puerto interno (default `3939`) |
 
-**No** configurar `WIBI_USER`, `WIBI_PASS` ni `MCP_HTTP_TOKEN` en este modo: el login es por comercio.
+**No** configurar `WIBI_USER`, `WIBI_PASS` ni `MCP_HTTP_TOKEN` en este modo: el login es interactivo (comercio o admin del panel).
 
 ```bash
 MCP_TRANSPORT=http \
@@ -112,9 +114,16 @@ Endpoints:
 - `GET /.well-known/oauth-authorization-server` — metadata OAuth
 - `POST /register` — Dynamic Client Registration
 - `GET /authorize` — pantalla de login
-- `POST /oauth/approve` — valida usuario/clave WIBI
+- `POST /oauth/approve` — login multi-paso (credenciales → OTP opcional → selector campaña/comercio)
 - `POST /token` — intercambia code / refresh
 - `POST|GET|DELETE /mcp` — MCP Streamable HTTP (Bearer OAuth)
+
+API Laravel usada por el login OAuth:
+
+- `POST /onzecrm/v2/auth/login`
+- `POST /onzecrm/v2/auth/verify-otp` / `resend-otp`
+- `POST /onzecrm/v2/auth/scoped-comercios` / `select-scope`
+- `POST /onzecrm/v2/auth/refresh` / `revoke`
 
 ### Docker
 
@@ -149,10 +158,12 @@ Notas:
 ### Arquitectura de sesión
 
 ```
-claude.ai → OAuth (login comercio) → access token MCP
+claude.ai → OAuth (login comercio o admin) → access token MCP
          → /mcp (Bearer) → WibiClient con JWT del comercio
          → API v2 Laravel (scope por IdComercio / IdRed / idCampania)
 ```
+
+Si entra un **admin del panel**, el JWT final sigue siendo del **comercio seleccionado** (mismo alcance v2). El actor real (`actor_id` / `actor_name` / `actor_role`) viaja en el JWT y en los logs de escritura para auditoría.
 
 Cuando el JWT WIBI está por vencer, el gateway lo renueva con `POST /onzecrm/v2/auth/refresh` (sin volver a pedir la clave).
 
