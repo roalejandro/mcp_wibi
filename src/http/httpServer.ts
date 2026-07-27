@@ -174,105 +174,116 @@ export async function startHttpServer(
     express.json({ limit: "1mb" }),
     bearer,
     async (req: Request, res: Response) => {
-      const sessionId = req.headers["mcp-session-id"] as string | undefined;
-      let bound: BoundTransport | undefined = sessionId ? transports[sessionId] : undefined;
+      try {
+        const sessionId = req.headers["mcp-session-id"] as string | undefined;
+        let bound: BoundTransport | undefined = sessionId ? transports[sessionId] : undefined;
 
-      if (bound) {
-        if (!assertOwner(req, bound)) {
-          res.status(401).json({
+        if (bound) {
+          if (!assertOwner(req, bound)) {
+            res.status(401).json({
+              jsonrpc: "2.0",
+              error: { code: -32001, message: "La sesión MCP no pertenece a este usuario." },
+              id: null,
+            });
+            return;
+          }
+          await bound.transport.handleRequest(req, res, req.body);
+          return;
+        }
+
+        if (sessionId || !isInitializeRequest(req.body)) {
+          res.status(400).json({
             jsonrpc: "2.0",
-            error: { code: -32001, message: "La sesión MCP no pertenece a este usuario." },
+            error: {
+              code: -32000,
+              message: "Sesión no encontrada o falta la petición initialize.",
+            },
             id: null,
           });
           return;
         }
-        await bound.transport.handleRequest(req, res, req.body);
-        return;
-      }
 
-      if (sessionId || !isInitializeRequest(req.body)) {
-        res.status(400).json({
-          jsonrpc: "2.0",
-          error: {
-            code: -32000,
-            message: "Sesión no encontrada o falta la petición initialize.",
+        const session = req.auth?.extra?.session as WibiSession | undefined;
+        const ownerSessionId = req.auth?.extra?.sessionId as string | undefined;
+        const accessToken = req.auth?.token;
+        if (!session || !ownerSessionId || !accessToken) {
+          res.status(401).json({
+            jsonrpc: "2.0",
+            error: { code: -32001, message: "Token sin sesión de comercio asociada." },
+            id: null,
+          });
+          return;
+        }
+
+        const livingSession = { ...session };
+
+        const userClient = new WibiClient(
+          {
+            baseUrl: conn.baseUrl,
+            apiKey: conn.apiKey,
+            timeoutMs: conn.timeoutMs,
+            defaultCampania: livingSession.defaultCampania,
           },
-          id: null,
-        });
-        return;
-      }
+          {
+            session: {
+              accessToken: livingSession.wibiToken,
+              refreshToken: livingSession.refreshToken,
+              expiresAtMs: livingSession.tokenExpiryMs,
+            },
+            refresher: async (refreshToken) => {
+              const refreshed = await auth.refresh(refreshToken);
+              if (refreshed.kind === "error") {
+                throw new Error(refreshed.message);
+              }
+              livingSession.wibiToken = refreshed.session.wibiToken;
+              livingSession.refreshToken = refreshed.session.refreshToken;
+              livingSession.tokenExpiryMs = refreshed.session.tokenExpiryMs;
+              livingSession.campanias = refreshed.session.campanias;
+              provider.updateSessionForAccessToken(accessToken, livingSession);
+              return {
+                accessToken: refreshed.session.wibiToken,
+                refreshToken: refreshed.session.refreshToken,
+                expiresAtMs: refreshed.session.tokenExpiryMs,
+              };
+            },
+          }
+        );
 
-      const session = req.auth?.extra?.session as WibiSession | undefined;
-      const ownerSessionId = req.auth?.extra?.sessionId as string | undefined;
-      const accessToken = req.auth?.token;
-      if (!session || !ownerSessionId || !accessToken) {
-        res.status(401).json({
-          jsonrpc: "2.0",
-          error: { code: -32001, message: "Token sin sesión de comercio asociada." },
-          id: null,
-        });
-        return;
-      }
-
-      const livingSession = { ...session };
-
-      const userClient = new WibiClient(
-        {
-          baseUrl: conn.baseUrl,
-          apiKey: conn.apiKey,
-          timeoutMs: conn.timeoutMs,
-          defaultCampania: livingSession.defaultCampania,
-        },
-        {
-          session: {
-            accessToken: livingSession.wibiToken,
-            refreshToken: livingSession.refreshToken,
-            expiresAtMs: livingSession.tokenExpiryMs,
-          },
-          refresher: async (refreshToken) => {
-            const refreshed = await auth.refresh(refreshToken);
-            if (refreshed.kind === "error") {
-              throw new Error(refreshed.message);
-            }
-            livingSession.wibiToken = refreshed.session.wibiToken;
-            livingSession.refreshToken = refreshed.session.refreshToken;
-            livingSession.tokenExpiryMs = refreshed.session.tokenExpiryMs;
-            livingSession.campanias = refreshed.session.campanias;
-            provider.updateSessionForAccessToken(accessToken, livingSession);
-            return {
-              accessToken: refreshed.session.wibiToken,
-              refreshToken: refreshed.session.refreshToken,
-              expiresAtMs: refreshed.session.tokenExpiryMs,
+        const transport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: () => randomUUID(),
+          onsessioninitialized: (sid) => {
+            transports[sid] = {
+              transport,
+              ownerSessionId,
+              idComercio: livingSession.idComercio,
             };
           },
-        }
-      );
+        });
+        transport.onclose = () => {
+          if (transport.sessionId) delete transports[transport.sessionId];
+        };
 
-      const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => randomUUID(),
-        onsessioninitialized: (sid) => {
-          transports[sid] = {
-            transport,
-            ownerSessionId,
+        const mcp = buildMcpServer(userClient, {
+          campanias: livingSession.campanias,
+          defaultCampania: livingSession.defaultCampania,
+          comercio: {
             idComercio: livingSession.idComercio,
-          };
-        },
-      });
-      transport.onclose = () => {
-        if (transport.sessionId) delete transports[transport.sessionId];
-      };
-
-      const mcp = buildMcpServer(userClient, {
-        campanias: livingSession.campanias,
-        defaultCampania: livingSession.defaultCampania,
-        comercio: {
-          idComercio: livingSession.idComercio,
-          nombre: livingSession.nombreComercio,
-          idRed: livingSession.idRed,
-        },
-      });
-      await mcp.connect(transport);
-      await transport.handleRequest(req, res, req.body);
+            nombre: livingSession.nombreComercio,
+            idRed: livingSession.idRed,
+          },
+        });
+        await mcp.connect(transport);
+        await transport.handleRequest(req, res, req.body);
+      } catch (err) {
+        console.error("[wibi-mcp-gateway] error en POST /mcp:", err);
+        if (!res.headersSent) {
+          res.status(500).json({
+            jsonrpc: "2.0",
+            error: { code: -32603, message: "Error interno del gateway MCP." },
+            id: null,
+          });
+        }
+      }
     }
   );
 
@@ -296,6 +307,25 @@ export async function startHttpServer(
   // Evitar body parsers demasiado grandes en el resto
   app.use((_req: Request, res: Response) => {
     res.status(404).json({ error: "Not found" });
+  });
+
+  // Bearer inválido/expirado (p. ej. tras reinicio del contenedor) → 401, no 500.
+  app.use((err: unknown, _req: Request, res: Response, next: (e?: unknown) => void) => {
+    const message = err instanceof Error ? err.message : String(err);
+    if (/token|autoriz|Bearer|Authentication/i.test(message)) {
+      if (!res.headersSent) {
+        res.status(401).json({
+          jsonrpc: "2.0",
+          error: {
+            code: -32001,
+            message: "Sesión OAuth inválida o expirada. Volvé a conectar el conector.",
+          },
+          id: null,
+        });
+      }
+      return;
+    }
+    next(err);
   });
 
   await new Promise<void>((resolve) => {

@@ -55,7 +55,13 @@ export function renderLoginPage(res: Response, opts: RenderLoginOptions, status 
   res
     .status(status)
     .setHeader("Cache-Control", "no-store")
-    .setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
+    // Chromium aplica form-action a toda la cadena de redirects tras el POST.
+    // El approve hace 302 a redirect_uri del cliente (claude.ai / claude://…);
+    // con solo 'self' Chrome bloquea el salto y la UI parece "quedarse" en login.
+    .setHeader(
+      "Content-Security-Policy",
+      "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action 'self' https: claude:; frame-ancestors 'none'; base-uri 'none'"
+    )
     .setHeader("X-Frame-Options", "DENY")
     .type("html")
     .send(`<!doctype html>
@@ -73,13 +79,14 @@ export function renderLoginPage(res: Response, opts: RenderLoginOptions, status 
     label { display:block; font-size:13px; margin:12px 0 6px; }
     input[type=text], input[type=password] { width:100%; box-sizing:border-box; padding:10px; border-radius:8px; border:1px solid #334155; background:#0f172a; color:#e2e8f0; }
     button { width:100%; margin-top:20px; padding:11px; border:0; border-radius:8px; background:#00A3D7; color:#fff; font-weight:600; cursor:pointer; }
-    button:hover { background:#0284c7; }
+    button:hover:not(:disabled) { background:#0284c7; }
+    button:disabled { opacity:.65; cursor:wait; }
     .error { color:#fca5a5; background:#7f1d1d33; border:1px solid #7f1d1d; padding:8px 10px; border-radius:8px; font-size:13px; }
     .brand { color:#8DC43E; font-weight:700; letter-spacing:.02em; margin-bottom:12px; font-size:14px; }
   </style>
 </head>
 <body>
-  <form method="post" action="/oauth/approve" autocomplete="on">
+  <form method="post" action="/oauth/approve" autocomplete="on" id="login-form">
     <div class="brand">WIBI</div>
     <h1>Iniciar sesión</h1>
     <p><span class="app">${clientName}</span> quiere acceder a tu comercio WIBI.</p>
@@ -89,8 +96,20 @@ export function renderLoginPage(res: Response, opts: RenderLoginOptions, status 
     <label for="password">Contraseña</label>
     <input id="password" name="password" type="password" autocomplete="current-password" required />
     ${hiddenFields(opts.oauth)}
-    <button type="submit">Acceder</button>
+    <button type="submit" id="login-submit">Acceder</button>
   </form>
+  <script>
+    (function () {
+      var form = document.getElementById("login-form");
+      var btn = document.getElementById("login-submit");
+      if (!form || !btn) return;
+      form.addEventListener("submit", function () {
+        if (btn.disabled) return;
+        btn.disabled = true;
+        btn.textContent = "Conectando…";
+      });
+    })();
+  </script>
 </body>
 </html>`);
 }

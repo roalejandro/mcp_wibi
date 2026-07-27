@@ -19,7 +19,7 @@ No hace falta ser desarrollador ni editar archivos JSON.
 
 1. Entrá a [claude.ai](https://claude.ai) con tu cuenta.
 2. Andá a **Settings → Connectors → Add custom connector**.
-3. Pegá la URL del servidor: `https://mcp.wibi.com.ar/mcp`.
+3. Pegá la URL del servidor: `https://wibi.com.ar/mcp` *(URL temporal de prueba; ver nota DNS abajo)*.
 4. Claude abre la pantalla de login de WIBI en el navegador.
 5. Ingresá el **usuario y la contraseña de tu comercio WIBI** (los mismos que usás en el sistema).
 6. Autorizá. Ya podés pedirle a Claude cosas como:
@@ -32,7 +32,7 @@ Cada comercio ve **solo sus datos**. No hay tokens compartidos ni configuración
 ### Claude Desktop
 
 1. Abrí Claude Desktop → Settings → Connectors (o Developers, según la versión).
-2. Agregá un conector remoto con la URL `https://mcp.wibi.com.ar/mcp`.
+2. Agregá un conector remoto con la URL `https://wibi.com.ar/mcp` *(temporal; ver nota DNS)*.
 3. Completá el login en el navegador con tu usuario/clave WIBI.
 
 ---
@@ -92,7 +92,7 @@ Variables mínimas:
 |---|---|
 | `WIBI_BASE_URL` | URL de la API (`https://apiv2.wibi.com.ar`) |
 | `WIBI_API_KEY` | API key de la aplicación integradora |
-| `WIBI_PUBLIC_URL` | URL pública HTTPS del gateway (`https://mcp.wibi.com.ar`) |
+| `WIBI_PUBLIC_URL` | URL pública HTTPS del gateway (hoy `https://wibi.com.ar`; objetivo `https://mcp.wibi.com.ar`) |
 | `MCP_TRANSPORT` | `http` |
 | `WIBI_HTTP_PORT` | Puerto interno (default `3939`) |
 
@@ -102,7 +102,7 @@ Variables mínimas:
 MCP_TRANSPORT=http \
 WIBI_BASE_URL=https://apiv2.wibi.com.ar \
 WIBI_API_KEY=... \
-WIBI_PUBLIC_URL=https://mcp.wibi.com.ar \
+WIBI_PUBLIC_URL=https://wibi.com.ar \
 node dist/index.js --http
 ```
 
@@ -124,7 +124,21 @@ docker compose up -d --build
 curl http://127.0.0.1:3939/healthz
 ```
 
-Publicar detrás de Apache/Nginx en un **subdominio dedicado** (`mcp.wibi.com.ar`) con proxy de **toda** la raíz al contenedor (las rutas OAuth viven en `/`, no solo `/mcp`).
+### DNS / certificado (pendiente jefe — DonWeb)
+
+**Acción requerida (Quien tenga acceso DonWeb):** crear registro DNS:
+
+| Tipo | Host | Valor |
+|---|---|---|
+| A | `mcp` (`mcp.wibi.com.ar`) | `191.234.207.236` |
+
+Cuando exista el DNS, Fabrizzio puede:
+1. Emitir certificado Let's Encrypt (`certbot --apache -d mcp.wibi.com.ar`)
+2. Crear vhost dedicado que proxee **toda** la raíz al contenedor (`127.0.0.1:3939`)
+3. Cambiar `WIBI_PUBLIC_URL=https://mcp.wibi.com.ar` y recrear el contenedor
+4. Quitar del vhost `wibi.com.ar` los `ProxyPass` temporales de OAuth (`/authorize`, `/token`, `/register`, etc.)
+
+**Workaround actual (solo prueba):** OAuth se publica en `https://wibi.com.ar` con el certificado comercial existente, proxeando rutas OAuth + `/mcp` al contenedor. No es el diseño final.
 
 Notas:
 
