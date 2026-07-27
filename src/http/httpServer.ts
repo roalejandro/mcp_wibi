@@ -521,24 +521,33 @@ export async function startHttpServer(
 
         // Solo disponible si el login original fue de un admin del panel (impersonación).
         // Permite cambiar de comercio/campaña dentro de la misma sesión MCP sin relogin.
+        // Importante: Laravel /auth/my-* y /auth/switch-scope esperan el JWT WIBI
+        // (livingSession.wibiToken), NO el access token OAuth de Claude (accessToken).
         const scope = livingSession.actor
           ? {
               listComercios: async (idCampania: number) => {
-                const result = await auth.myScopedComercios(accessToken, idCampania);
+                const result = await auth.myScopedComercios(
+                  livingSession.wibiToken,
+                  idCampania
+                );
                 if (result.kind === "error") {
                   throw new Error(result.message);
                 }
                 return result.data.comercios;
               },
               listCampanias: async (q?: string) => {
-                const result = await auth.misCampanias(accessToken, q);
+                const result = await auth.misCampanias(livingSession.wibiToken, q);
                 if (result.kind === "error") {
                   throw new Error(result.message);
                 }
                 return result.data;
               },
               switchScope: async (idCampania: number, idComercio: number) => {
-                const switched = await auth.switchScope(accessToken, idCampania, idComercio);
+                const switched = await auth.switchScope(
+                  livingSession.wibiToken,
+                  idCampania,
+                  idComercio
+                );
                 if (switched.kind !== "ok") {
                   throw new Error(
                     switched.kind === "error"
