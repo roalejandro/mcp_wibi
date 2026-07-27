@@ -242,15 +242,17 @@ export function renderSelectScopePage(
           .join("\n        ");
 
   const canSubmit = comercios.length > 0;
-  const campaniasJson = JSON.stringify(
-    opts.campanias.map((c) => ({ idCampania: c.idCampania, nombre: c.nombre }))
-  );
+  // Solo IDs opacos: las campañas viven en memoria del gateway (pending_id).
+  // No reenviar campanias_json (superadmins tienen cientos → Payload Too Large).
   const sharedSelectHidden = {
     step: "select",
     pending_id: opts.pendingId,
-    campanias_json: campaniasJson,
-    actor_name: opts.actorName,
   };
+  const showFilter = opts.campanias.length > 12;
+  const filterHtml = showFilter
+    ? `<label for="campania-filter">Buscar campaña</label>
+    <input id="campania-filter" type="text" placeholder="Nombre o ID…" autocomplete="off" />`
+    : "";
 
   sendHtml(
     res,
@@ -264,8 +266,9 @@ export function renderSelectScopePage(
     <p><span class="app">${clientName}</span> operará dentro del comercio que elijas.</p>
     ${actorHtml}
     ${errorHtml}
+    ${filterHtml}
     <label for="idCampania">Campaña</label>
-    <select id="idCampania" name="idCampania" required>
+    <select id="idCampania" name="idCampania" required size="${showFilter ? 8 : 1}">
       <option value="">— Seleccionar —</option>
       ${campaniaOptions}
     </select>
@@ -293,11 +296,23 @@ export function renderSelectScopePage(
     (function () {
       var campania = document.getElementById("idCampania");
       var selectForm = document.getElementById("select-form");
+      var filter = document.getElementById("campania-filter");
       if (!campania || !selectForm) return;
       campania.addEventListener("change", function () {
         var hidden = selectForm.querySelector('input[name="idCampania"]');
         if (hidden) hidden.value = campania.value || "";
       });
+      if (filter) {
+        filter.addEventListener("input", function () {
+          var q = (filter.value || "").toLowerCase().trim();
+          var opts = campania.options;
+          for (var i = 0; i < opts.length; i++) {
+            var opt = opts[i];
+            if (!opt.value) { opt.hidden = false; continue; }
+            opt.hidden = q ? opt.text.toLowerCase().indexOf(q) === -1 : false;
+          }
+        });
+      }
     })();
   </script>`,
     })

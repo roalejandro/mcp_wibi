@@ -28,6 +28,11 @@ import {
   type OAuthFormParams,
 } from "./loginPage.js";
 import type { CampaniaInfo, SignInResult } from "../wibiAuth.js";
+import {
+  forgetSelectionContext,
+  getSelectionContext,
+  rememberSelectionContext,
+} from "./selectionContext.js";
 
 interface BoundTransport {
   transport: StreamableHTTPServerTransport;
@@ -55,21 +60,6 @@ function oauthFromBody(body: Record<string, string | undefined>): OAuthFormParam
   };
 }
 
-function parseCampaniasJson(raw: string | undefined): CampaniaInfo[] {
-  const text = (raw ?? "").trim();
-  if (!text) return [];
-  try {
-    const parsed = JSON.parse(text);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.map((c: any) => ({
-      idCampania: Number(c.idCampania),
-      nombre: String(c.nombre ?? ""),
-    }));
-  } catch {
-    return [];
-  }
-}
-
 function renderAuthStep(
   res: Response,
   result: SignInResult,
@@ -92,6 +82,11 @@ function renderAuthStep(
     return true;
   }
   if (result.kind === "needs_selection") {
+    rememberSelectionContext({
+      pendingId: result.pendingId,
+      campanias: result.campanias,
+      actorName: result.actor?.nombre,
+    });
     renderSelectScopePage(res, {
       oauth,
       pendingId: result.pendingId,
@@ -271,15 +266,27 @@ export async function startHttpServer(
         if (step === "select" && action === "load_comercios") {
           const pendingId = (body.pending_id ?? "").trim();
           const idCampania = Number(body.idCampania ?? 0);
-          const campanias = parseCampaniasJson(body.campanias_json);
+          const ctx = pendingId ? getSelectionContext(pendingId) : null;
+          const campanias = ctx?.campanias ?? [];
+          const actorName = ctx?.actorName;
 
-          if (!pendingId || !idCampania) {
+          if (!pendingId || !ctx) {
+            renderLoginPage(
+              res,
+              { oauth, error: "Sesión de selección expirada. Volvé a iniciar sesión." },
+              400
+            );
+            return;
+          }
+
+          if (!idCampania) {
             renderSelectScopePage(
               res,
               {
                 oauth,
-                pendingId: pendingId || "invalid",
+                pendingId,
                 campanias,
+                actorName,
                 error: "Seleccioná una campaña.",
               },
               400
@@ -296,6 +303,7 @@ export async function startHttpServer(
                 pendingId,
                 campanias,
                 selectedCampania: idCampania,
+                actorName,
                 error: listed.message,
               },
               403
@@ -309,7 +317,7 @@ export async function startHttpServer(
             campanias,
             selectedCampania: idCampania,
             comercios: listed.data.comercios,
-            actorName: body.actor_name,
+            actorName,
           });
           return;
         }
@@ -319,16 +327,28 @@ export async function startHttpServer(
           const pendingId = (body.pending_id ?? "").trim();
           const idCampania = Number(body.idCampania ?? 0);
           const idComercio = Number(body.idComercio ?? 0);
-          const campanias = parseCampaniasJson(body.campanias_json);
-          if (!pendingId || !idCampania || !idComercio) {
+          const ctx = pendingId ? getSelectionContext(pendingId) : null;
+          const campanias = ctx?.campanias ?? [];
+          const actorName = ctx?.actorName;
+
+          if (!pendingId || !ctx) {
+            renderLoginPage(
+              res,
+              { oauth, error: "Sesión de selección expirada. Volvé a iniciar sesión." },
+              400
+            );
+            return;
+          }
+
+          if (!idCampania || !idComercio) {
             renderSelectScopePage(
               res,
               {
                 oauth,
-                pendingId: pendingId || "invalid",
+                pendingId,
                 campanias,
                 selectedCampania: idCampania || undefined,
-                actorName: body.actor_name,
+                actorName,
                 error: "Seleccioná campaña y comercio.",
               },
               400
@@ -341,11 +361,12 @@ export async function startHttpServer(
             pendingId,
             campanias,
             selectedCampania: idCampania,
-            actorName: body.actor_name,
+            actorName,
           })) {
             return;
           }
           if (result.kind === "ok") {
+            forgetSelectionContext(pendingId);
             const redirectTo = provider.completeAuthorization({
               authRequestId,
               session: result.session,
