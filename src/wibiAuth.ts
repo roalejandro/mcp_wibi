@@ -4,6 +4,7 @@
  * Soporta:
  *  - login de comercio → tokens + comercio
  *  - login de admin panel → needs_otp (2FA) y/o needs_selection (campaña/comercio)
+ *  - cambio de alcance (campaña/comercio) dentro de una sesión MCP admin ya activa
  *
  * POST /onzecrm/v2/auth/login
  * POST /onzecrm/v2/auth/verify-otp
@@ -12,6 +13,8 @@
  * POST /onzecrm/v2/auth/select-scope
  * POST /onzecrm/v2/auth/refresh
  * POST /onzecrm/v2/auth/revoke
+ * POST /onzecrm/v2/auth/my-scoped-comercios (Bearer)
+ * POST /onzecrm/v2/auth/switch-scope        (Bearer)
  */
 
 import type { ConnectionConfig } from "./config.js";
@@ -148,6 +151,48 @@ export class WibiAuthService {
     }
   }
 
+  /**
+   * Lista los comercios de una campaña dentro del alcance del actor real de una sesión
+   * MCP ya autenticada (requiere que el login original haya sido de un admin, no de comercio).
+   */
+  async myScopedComercios(
+    accessToken: string,
+    idCampania: number
+  ): Promise<ApiResult<{ comercios: ComercioInfo[] }>> {
+    const result = await this.requestJson(
+      "/onzecrm/v2/auth/my-scoped-comercios",
+      { idCampania },
+      accessToken
+    );
+    if (result.kind === "error") return result;
+    const comercios: ComercioInfo[] = Array.isArray(result.data?.comercios)
+      ? result.data.comercios.map((c: any) => ({
+          idComercio: Number(c.idComercio),
+          nombre: String(c.nombre ?? ""),
+          idRed: Number(c.idRed ?? 0),
+        }))
+      : [];
+    return { kind: "ok", data: { comercios } };
+  }
+
+  /**
+   * Cambia el comercio/campaña activos de una sesión MCP admin ya autenticada, sin
+   * volver a pedir credenciales ni 2FA. Devuelve un nuevo TokenBundle + comercio + campanias.
+   */
+  async switchScope(
+    accessToken: string,
+    idCampania: number,
+    idComercio: number
+  ): Promise<SignInResult> {
+    return this.parseAuthResponse(
+      await this.requestJson(
+        "/onzecrm/v2/auth/switch-scope",
+        { idCampania, idComercio },
+        accessToken
+      )
+    );
+  }
+
   toTokenBundle(session: WibiSession): TokenBundle {
     return {
       accessToken: session.wibiToken,
@@ -251,7 +296,8 @@ export class WibiAuthService {
 
   private async requestJson(
     path: string,
-    body: Record<string, string | number>
+    body: Record<string, string | number>,
+    accessToken?: string
   ): Promise<ApiResult<Record<string, any>>> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.conn.timeoutMs);
@@ -264,6 +310,7 @@ export class WibiAuthService {
           "api-key": this.conn.apiKey,
           "Content-Type": "application/json",
           Accept: "application/json",
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
         },
         body: JSON.stringify(body),
         signal: controller.signal,

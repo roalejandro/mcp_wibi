@@ -167,6 +167,8 @@ Si entra un **admin del panel**, el JWT final sigue siendo del **comercio selecc
 
 Cuando el JWT WIBI está por vencer, el gateway lo renueva con `POST /onzecrm/v2/auth/refresh` (sin volver a pedir la clave).
 
+**Cambio de comercio dentro de la misma sesión (solo admins):** un admin/superadmin puede pasar de un comercio a otro sin volver a loguearse ni pasar 2FA de nuevo, usando las tools `wibi_comercios_de_campania` y `wibi_cambiar_comercio` (ver más abajo). Internamente llaman a `POST /onzecrm/v2/auth/my-scoped-comercios` y `POST /onzecrm/v2/auth/switch-scope` (ambos con Bearer del token actual), que reemiten JWT + refresh conservando el `actor_id` real para auditoría. El comercio directo (login sin actor) no ve estas tools.
+
 ---
 
 ## Herramientas principales
@@ -176,6 +178,7 @@ Cuando el JWT WIBI está por vencer, el gateway lo renueva con `POST /onzecrm/v2
 - Difusiones: tags, plantillas WhatsApp, programar/consultar
 - Suscripciones: tipos de alerta, crear/consultar
 - En modo OAuth: `wibi_mis_campanias`
+- En modo OAuth, solo para sesiones admin (`es_admin: true` en `wibi_mis_campanias`): `wibi_comercios_de_campania` (lista comercios de una campaña dentro del alcance del admin) y `wibi_cambiar_comercio` (cambia el comercio/campaña activos de la sesión sin relogin)
 
 La tool de plantilla de email está deshabilitada hasta que exista el endpoint Laravel correspondiente.
 

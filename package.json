@@ -1,6 +1,6 @@
 {
   "name": "wibi-mcp-gateway",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "MCP Gateway multi-tenant que conecta Claude con el CRM WIBI (API v2) mediante OAuth 2.1 por comercio.",
   "type": "module",
   "main": "dist/index.js",

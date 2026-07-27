@@ -519,6 +519,62 @@ export async function startHttpServer(
           if (transport.sessionId) delete transports[transport.sessionId];
         };
 
+        // Solo disponible si el login original fue de un admin del panel (impersonación).
+        // Permite cambiar de comercio/campaña dentro de la misma sesión MCP sin relogin.
+        const scope = livingSession.actor
+          ? {
+              listComercios: async (idCampania: number) => {
+                const result = await auth.myScopedComercios(accessToken, idCampania);
+                if (result.kind === "error") {
+                  throw new Error(result.message);
+                }
+                return result.data.comercios;
+              },
+              switchScope: async (idCampania: number, idComercio: number) => {
+                const switched = await auth.switchScope(accessToken, idCampania, idComercio);
+                if (switched.kind !== "ok") {
+                  throw new Error(
+                    switched.kind === "error"
+                      ? switched.message
+                      : "No se pudo cambiar de comercio."
+                  );
+                }
+
+                livingSession.idComercio = switched.session.idComercio;
+                livingSession.nombreComercio = switched.session.nombreComercio;
+                livingSession.idRed = switched.session.idRed;
+                livingSession.campanias = switched.session.campanias;
+                livingSession.defaultCampania = switched.session.defaultCampania;
+                livingSession.wibiToken = switched.session.wibiToken;
+                livingSession.refreshToken = switched.session.refreshToken;
+                livingSession.tokenExpiryMs = switched.session.tokenExpiryMs;
+
+                userClient.setSession({
+                  accessToken: switched.session.wibiToken,
+                  refreshToken: switched.session.refreshToken,
+                  expiresAtMs: switched.session.tokenExpiryMs,
+                });
+                userClient.setDefaultCampania(switched.session.defaultCampania);
+
+                provider.updateSessionForAccessToken(accessToken, livingSession);
+                if (transport.sessionId) {
+                  const bound = transports[transport.sessionId];
+                  if (bound) bound.idComercio = livingSession.idComercio;
+                }
+
+                return {
+                  comercio: {
+                    idComercio: livingSession.idComercio,
+                    nombre: livingSession.nombreComercio,
+                    idRed: livingSession.idRed,
+                  },
+                  campanias: livingSession.campanias,
+                  defaultCampania: livingSession.defaultCampania,
+                };
+              },
+            }
+          : undefined;
+
         const mcp = buildMcpServer(userClient, {
           campanias: livingSession.campanias,
           defaultCampania: livingSession.defaultCampania,
@@ -527,6 +583,8 @@ export async function startHttpServer(
             nombre: livingSession.nombreComercio,
             idRed: livingSession.idRed,
           },
+          actor: livingSession.actor,
+          scope,
         });
         await mcp.connect(transport);
         await transport.handleRequest(req, res, req.body);

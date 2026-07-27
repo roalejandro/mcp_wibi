@@ -31,7 +31,7 @@ export class WibiClient {
   private readonly timeoutMs: number;
   private readonly stdioAuth?: StdioAuthConfig;
   private readonly refresher?: TokenRefresher;
-  private readonly fixedDefaultCampania?: number;
+  private fixedDefaultCampania?: number;
 
   constructor(
     cfg: WibiConfig | (ConnectionConfig & { defaultCampania?: number }),
@@ -66,6 +66,11 @@ export class WibiClient {
   /** Actualiza tokens de sesión (p. ej. tras un refresh OAuth externo). */
   setSession(bundle: TokenBundle): void {
     this.applyBundle(bundle);
+  }
+
+  /** Actualiza la campaña por defecto (p. ej. tras un cambio de alcance de un admin). */
+  setDefaultCampania(idCampania?: number): void {
+    this.fixedDefaultCampania = idCampania;
   }
 
   private applyBundle(bundle: TokenBundle): void {
