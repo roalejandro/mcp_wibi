@@ -132,7 +132,7 @@ curl http://127.0.0.1:3939/healthz
 |---|---|---|
 | A | `mcp` (`mcp.wibi.com.ar`) | `191.234.207.236` |
 
-Cuando exista el DNS, Fabrizzio puede:
+Cuando exista el DNS, puedo:
 1. Emitir certificado Let's Encrypt (`certbot --apache -d mcp.wibi.com.ar`)
 2. Crear vhost dedicado que proxee **toda** la raíz al contenedor (`127.0.0.1:3939`)
 3. Cambiar `WIBI_PUBLIC_URL=https://mcp.wibi.com.ar` y recrear el contenedor
