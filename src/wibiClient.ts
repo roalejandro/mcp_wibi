@@ -11,6 +11,13 @@ export interface TokenBundle {
   expiresAtMs: number;
 }
 
+export interface BinaryResponse {
+  contentType: string;
+  filename?: string;
+  base64: string;
+  rowCount?: number;
+}
+
 export type TokenRefresher = (refreshToken: string) => Promise<TokenBundle>;
 
 /**
@@ -32,6 +39,7 @@ export class WibiClient {
   private readonly stdioAuth?: StdioAuthConfig;
   private readonly refresher?: TokenRefresher;
   private fixedDefaultCampania?: number;
+  private preferredComercio?: number;
 
   constructor(
     cfg: WibiConfig | (ConnectionConfig & { defaultCampania?: number }),
@@ -71,6 +79,15 @@ export class WibiClient {
   /** Actualiza la campaña por defecto (p. ej. tras un cambio de alcance de un admin). */
   setDefaultCampania(idCampania?: number): void {
     this.fixedDefaultCampania = idCampania;
+  }
+
+  get preferredIdComercio(): number | undefined {
+    return this.preferredComercio;
+  }
+
+  /** Fija un filtro de comercio opcional para sesiones admin. */
+  setPreferredIdComercio(idComercio?: number): void {
+    this.preferredComercio = idComercio;
   }
 
   private applyBundle(bundle: TokenBundle): void {
@@ -229,6 +246,53 @@ export class WibiClient {
 
   get<T = unknown>(path: string, query?: Record<string, unknown>): Promise<T> {
     return this.request<T>("GET", path, { query });
+  }
+
+  async getBinary(
+    path: string,
+    query?: Record<string, unknown>,
+    isRetry = false
+  ): Promise<BinaryResponse> {
+    const token = await this.ensureToken();
+    const url = new URL(`${this.baseUrl}/onzecrm/v2/${path.replace(/^\//, "")}`);
+    for (const [key, value] of Object.entries(query ?? {})) {
+      if (value !== undefined && value !== null && value !== "") {
+        url.searchParams.set(key, String(value));
+      }
+    }
+
+    const res = await this.fetchWithTimeout(
+      url.toString(),
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "api-key": this.apiKey,
+          Accept: "*/*",
+        },
+      },
+      this.timeoutMs
+    );
+
+    if (res.status === 401 && !isRetry) {
+      this.token = null;
+      this.tokenExpiryMs = 0;
+      await this.ensureToken();
+      return this.getBinary(path, query, true);
+    }
+    if (!res.ok) {
+      const message = (await res.text()).slice(0, 300);
+      throw new Error(`Error API WIBI (HTTP ${res.status}): ${message}`);
+    }
+
+    const disposition = res.headers.get("content-disposition") ?? "";
+    const filenameMatch = disposition.match(/filename\*?=(?:UTF-8''|")?([^";]+)/i);
+    const rowCount = Number(res.headers.get("x-row-count") ?? 0) || undefined;
+    return {
+      contentType: res.headers.get("content-type") ?? "application/octet-stream",
+      filename: filenameMatch ? decodeURIComponent(filenameMatch[1].trim()) : undefined,
+      base64: Buffer.from(await res.arrayBuffer()).toString("base64"),
+      rowCount,
+    };
   }
 
   post<T = unknown>(path: string, body?: unknown, query?: Record<string, unknown>): Promise<T> {

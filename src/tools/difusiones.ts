@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { WibiClient } from "../wibiClient.js";
-import { campaniaParam, errorResult, jsonResult } from "./helpers.js";
+import { errorResult, jsonResult, scopeParams } from "./helpers.js";
 
 const WRITE = {
   readOnlyHint: false,
@@ -23,6 +23,7 @@ const idCampania = z
   .positive()
   .optional()
   .describe("Campaña destino. Opcional si el comercio opera una sola campaña.");
+const idComercio = z.number().int().positive().optional().describe("Filtro opcional por comercio.");
 
 /**
  * Herramientas de Fase 2: Difusiones.
@@ -37,6 +38,7 @@ export function registerDifusionesTools(server: McpServer, client: WibiClient): 
         "Asigna una o más etiquetas (tags) a una lista de clientes. Valida que tags y clientes pertenezcan a la campaña/comercio.",
       inputSchema: {
         idCampania,
+        idComercio,
         idClientes: z.array(z.number().int().positive()).min(1),
         idTags: z.array(z.number().int().positive()).min(1),
       },
@@ -50,7 +52,7 @@ export function registerDifusionesTools(server: McpServer, client: WibiClient): 
             idClientes: args.idClientes,
             idTags: args.idTags,
           },
-          campaniaParam(client, args.idCampania)
+          scopeParams(client, args)
         );
         return jsonResult(data);
       } catch (e) {
@@ -67,6 +69,7 @@ export function registerDifusionesTools(server: McpServer, client: WibiClient): 
         "Registra una plantilla de WhatsApp asociada al canal Meta Cloud API de la campaña.",
       inputSchema: {
         idCampania,
+        idComercio,
         nombre: z.string().min(1),
         idPlantilla: z.string().optional().describe("ID de plantilla en Meta (si ya existe)"),
         idMetaCloudApi: z.number().int().positive().optional(),
@@ -90,7 +93,7 @@ export function registerDifusionesTools(server: McpServer, client: WibiClient): 
             encabezado: args.encabezado,
             estado: args.estado,
           },
-          campaniaParam(client, args.idCampania)
+          scopeParams(client, args)
         );
         return jsonResult(data);
       } catch (e) {
@@ -107,6 +110,7 @@ export function registerDifusionesTools(server: McpServer, client: WibiClient): 
         "Programa una difusión (cabecera + destinatarios) para una fecha/hora. Valida que los clientes pertenezcan al comercio.",
       inputSchema: {
         idCampania,
+        idComercio,
         nombre: z.string().min(1),
         fechaHora: z.string().optional().describe("YYYY-MM-DD HH:mm:ss"),
         idClientes: z.array(z.number().int().positive()).optional(),
@@ -122,7 +126,7 @@ export function registerDifusionesTools(server: McpServer, client: WibiClient): 
             fechaHora: args.fechaHora,
             idClientes: args.idClientes ?? [],
           },
-          campaniaParam(client, args.idCampania)
+          scopeParams(client, args)
         );
         return jsonResult(data);
       } catch (e) {
@@ -136,12 +140,12 @@ export function registerDifusionesTools(server: McpServer, client: WibiClient): 
     {
       title: "Consultar difusiones",
       description: "Lista las difusiones de la campaña.",
-      inputSchema: { idCampania },
+      inputSchema: { idCampania, idComercio },
       annotations: READONLY,
     },
     async (args) => {
       try {
-        const data = await client.get("difusiones", campaniaParam(client, args.idCampania));
+        const data = await client.get("difusiones", scopeParams(client, args));
         return jsonResult(data);
       } catch (e) {
         return errorResult(e);
@@ -157,6 +161,7 @@ export function registerDifusionesTools(server: McpServer, client: WibiClient): 
       inputSchema: {
         idDifusion: z.number().int().positive(),
         idCampania,
+        idComercio,
       },
       annotations: READONLY,
     },
@@ -164,7 +169,7 @@ export function registerDifusionesTools(server: McpServer, client: WibiClient): 
       try {
         const data = await client.get(
           `difusiones/${args.idDifusion}`,
-          campaniaParam(client, args.idCampania)
+          scopeParams(client, args)
         );
         return jsonResult(data);
       } catch (e) {

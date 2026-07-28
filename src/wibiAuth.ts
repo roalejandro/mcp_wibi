@@ -49,6 +49,11 @@ export interface WibiSession {
   campanias: CampaniaInfo[];
   defaultCampania?: number;
   actor?: ActorInfo;
+  /** Admin opera todas sus campañas autorizadas, sin comercio fijo. */
+  scopeMode?: "admin" | "comercio";
+  permisos?: Record<string, string[]>;
+  /** Filtro de comercio opcional elegido por el admin. */
+  preferredIdComercio?: number;
 }
 
 export type SignInResult =
@@ -288,9 +293,13 @@ export class WibiAuthService {
     }
 
     const comercio = payload?.comercio ?? {};
+    const scopeMode: "admin" | "comercio" =
+      payload?.scope_mode === "admin" || comercio === null || Number(comercio.idComercio ?? 0) === 0
+        ? "admin"
+        : "comercio";
     const idComercio = Number(comercio.idComercio ?? 0);
     const idRed = Number(comercio.idRed ?? 0);
-    if (!idComercio || !idRed) {
+    if (scopeMode === "comercio" && (!idComercio || !idRed)) {
       return { kind: "error", message: "La respuesta de login no incluye comercio/red." };
     }
 
@@ -305,13 +314,32 @@ export class WibiAuthService {
         refreshToken,
         tokenExpiryMs,
         idComercio,
-        nombreComercio: String(comercio.nombre ?? "Comercio"),
+        nombreComercio: String(comercio.nombre ?? (scopeMode === "admin" ? "Admin" : "Comercio")),
         idRed,
         campanias,
         defaultCampania: campanias.length === 1 ? campanias[0].idCampania : undefined,
         actor: this.mapActor(payload?.actor),
+        scopeMode,
+        permisos: this.mapPermisos(payload?.permisos),
+        preferredIdComercio: this.mapPreferredComercio(
+          payload?.preferred_comercio,
+          comercio
+        ),
       },
     };
+  }
+
+  private mapPreferredComercio(
+    preferred: unknown,
+    comercio: Record<string, unknown> | null | undefined
+  ): number | undefined {
+    if (preferred && typeof preferred === "object") {
+      const id = Number((preferred as Record<string, unknown>).idComercio ?? 0);
+      if (id > 0) return id;
+    }
+    if (typeof preferred === "number" && preferred > 0) return preferred;
+    const fromComercio = Number(comercio?.idComercio ?? 0);
+    return fromComercio > 0 ? fromComercio : undefined;
   }
 
   private mapCampanias(raw: unknown): CampaniaInfo[] {
@@ -333,6 +361,19 @@ export class WibiAuthService {
       nombre: String(a.nombre ?? ""),
       rol: String(a.rol ?? ""),
     };
+  }
+
+  private mapPermisos(raw: unknown): Record<string, string[]> | undefined {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+
+    return Object.fromEntries(
+      Object.entries(raw as Record<string, unknown>)
+        .filter(([, actions]) => Array.isArray(actions))
+        .map(([key, actions]) => [
+          key,
+          (actions as unknown[]).map((action) => String(action)),
+        ])
+    );
   }
 
   private async requestJson(

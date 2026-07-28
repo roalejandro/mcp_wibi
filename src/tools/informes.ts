@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { WibiClient } from "../wibiClient.js";
-import { campaniaParam, errorResult, jsonResult } from "./helpers.js";
+import { errorResult, jsonResult, scopeParams } from "./helpers.js";
 
 const READONLY = {
   readOnlyHint: true,
@@ -16,10 +16,16 @@ const idCampania = z
   .positive()
   .optional()
   .describe("Campaña a consultar. Opcional si el comercio opera una sola campaña.");
+const idComercio = z
+  .number()
+  .int()
+  .positive()
+  .optional()
+  .describe("Filtro opcional por comercio para sesiones admin.");
 
 /**
  * Herramientas de Fase 1: Informes y consultas (solo lectura).
- * El IdComercio nunca se pasa: lo deriva el API del token del comercio.
+ * Las sesiones admin pueden filtrar opcionalmente por comercio.
  */
 export function registerInformesTools(server: McpServer, client: WibiClient): void {
   server.registerTool(
@@ -30,6 +36,7 @@ export function registerInformesTools(server: McpServer, client: WibiClient): vo
         "Lista movimientos (ventas, canjes, ajustes) de la campaña del comercio, con filtros por fecha, cliente y tipo. Datos acotados a la campaña.",
       inputSchema: {
         idCampania,
+        idComercio,
         fechaDesde: z.string().optional().describe("YYYY-MM-DD"),
         fechaHasta: z.string().optional().describe("YYYY-MM-DD"),
         idCliente: z.number().int().positive().optional(),
@@ -42,7 +49,7 @@ export function registerInformesTools(server: McpServer, client: WibiClient): vo
     async (args) => {
       try {
         const data = await client.get("movimientos", {
-          ...campaniaParam(client, args.idCampania),
+          ...scopeParams(client, args),
           fechaDesde: args.fechaDesde,
           fechaHasta: args.fechaHasta,
           idCliente: args.idCliente,
@@ -66,13 +73,14 @@ export function registerInformesTools(server: McpServer, client: WibiClient): vo
       inputSchema: {
         idMovimiento: z.number().int().positive(),
         idCampania,
+        idComercio,
       },
       annotations: READONLY,
     },
     async (args) => {
       try {
         const data = await client.get(`movimientos/${args.idMovimiento}`, {
-          ...campaniaParam(client, args.idCampania),
+          ...scopeParams(client, args),
         });
         return jsonResult(data);
       } catch (e) {
@@ -89,6 +97,7 @@ export function registerInformesTools(server: McpServer, client: WibiClient): vo
         "Busca/lista clientes de la campaña por nombre, DNI, tarjeta o email, con filtros por categoría y segmento.",
       inputSchema: {
         idCampania,
+        idComercio,
         buscar: z.string().optional(),
         idCategoria: z.number().int().positive().optional(),
         idGrupoInteres: z.number().int().positive().optional(),
@@ -101,7 +110,7 @@ export function registerInformesTools(server: McpServer, client: WibiClient): vo
     async (args) => {
       try {
         const data = await client.get("clientes", {
-          ...campaniaParam(client, args.idCampania),
+          ...scopeParams(client, args),
           buscar: args.buscar,
           idCategoria: args.idCategoria,
           idGrupoInteres: args.idGrupoInteres,
@@ -123,6 +132,7 @@ export function registerInformesTools(server: McpServer, client: WibiClient): vo
       description: "Lista productos del catálogo de la red del comercio.",
       inputSchema: {
         idCampania,
+        idComercio,
         buscar: z.string().optional(),
         soloActivos: z.boolean().optional(),
         idMarca: z.number().int().positive().optional(),
@@ -134,7 +144,7 @@ export function registerInformesTools(server: McpServer, client: WibiClient): vo
     async (args) => {
       try {
         const data = await client.get("productos", {
-          ...campaniaParam(client, args.idCampania),
+          ...scopeParams(client, args),
           buscar: args.buscar,
           soloActivos: args.soloActivos,
           idMarca: args.idMarca,
@@ -153,12 +163,12 @@ export function registerInformesTools(server: McpServer, client: WibiClient): vo
     {
       title: "Listar clasificadores",
       description: "Lista los clasificadores de productos de la red del comercio.",
-      inputSchema: { idCampania },
+      inputSchema: { idCampania, idComercio },
       annotations: READONLY,
     },
     async (args) => {
       try {
-        const data = await client.get("clasificadores", campaniaParam(client, args.idCampania));
+        const data = await client.get("clasificadores", scopeParams(client, args));
         return jsonResult(data);
       } catch (e) {
         return errorResult(e);
@@ -171,12 +181,12 @@ export function registerInformesTools(server: McpServer, client: WibiClient): vo
     {
       title: "Listar marcas",
       description: "Lista las marcas presentes en el catálogo de la red del comercio.",
-      inputSchema: { idCampania },
+      inputSchema: { idCampania, idComercio },
       annotations: READONLY,
     },
     async (args) => {
       try {
-        const data = await client.get("marcas", campaniaParam(client, args.idCampania));
+        const data = await client.get("marcas", scopeParams(client, args));
         return jsonResult(data);
       } catch (e) {
         return errorResult(e);
@@ -189,12 +199,12 @@ export function registerInformesTools(server: McpServer, client: WibiClient): vo
     {
       title: "Listar segmentos",
       description: "Lista los segmentos (grupos de interés) de la campaña.",
-      inputSchema: { idCampania },
+      inputSchema: { idCampania, idComercio },
       annotations: READONLY,
     },
     async (args) => {
       try {
-        const data = await client.get("segmentos", campaniaParam(client, args.idCampania));
+        const data = await client.get("segmentos", scopeParams(client, args));
         return jsonResult(data);
       } catch (e) {
         return errorResult(e);
@@ -207,12 +217,12 @@ export function registerInformesTools(server: McpServer, client: WibiClient): vo
     {
       title: "Listar etiquetas (tags)",
       description: "Lista las etiquetas/tags disponibles en la campaña para clasificar clientes.",
-      inputSchema: { idCampania },
+      inputSchema: { idCampania, idComercio },
       annotations: READONLY,
     },
     async (args) => {
       try {
-        const data = await client.get("tags", campaniaParam(client, args.idCampania));
+        const data = await client.get("tags", scopeParams(client, args));
         return jsonResult(data);
       } catch (e) {
         return errorResult(e);
@@ -227,6 +237,7 @@ export function registerInformesTools(server: McpServer, client: WibiClient): vo
       description: "Lista cupones de la campaña, con filtros por estado y vigencia.",
       inputSchema: {
         idCampania,
+        idComercio,
         buscar: z.string().optional(),
         soloActivos: z.boolean().optional(),
         soloVigentes: z.boolean().optional(),
@@ -238,7 +249,7 @@ export function registerInformesTools(server: McpServer, client: WibiClient): vo
     async (args) => {
       try {
         const data = await client.get("cupones", {
-          ...campaniaParam(client, args.idCampania),
+          ...scopeParams(client, args),
           buscar: args.buscar,
           soloActivos: args.soloActivos,
           soloVigentes: args.soloVigentes,
@@ -260,12 +271,13 @@ export function registerInformesTools(server: McpServer, client: WibiClient): vo
       inputSchema: {
         idCupon: z.number().int().positive(),
         idCampania,
+        idComercio,
       },
       annotations: READONLY,
     },
     async (args) => {
       try {
-        const data = await client.get(`cupones/${args.idCupon}`, campaniaParam(client, args.idCampania));
+        const data = await client.get(`cupones/${args.idCupon}`, scopeParams(client, args));
         return jsonResult(data);
       } catch (e) {
         return errorResult(e);

@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { WibiClient } from "../wibiClient.js";
-import { campaniaParam, errorResult, jsonResult } from "./helpers.js";
+import { errorResult, jsonResult, scopeParams } from "./helpers.js";
 
 const WRITE = {
   readOnlyHint: false,
@@ -23,6 +23,7 @@ const idCampania = z
   .positive()
   .optional()
   .describe("Campaña destino. Opcional si el comercio opera una sola campaña.");
+const idComercio = z.number().int().positive().optional().describe("Filtro opcional por comercio.");
 
 /**
  * Herramientas de Fase 2: Suscripciones.
@@ -37,6 +38,7 @@ export function registerSuscripcionesTools(server: McpServer, client: WibiClient
         "Crea un tipo de alerta en la campaña (p. ej. recompra de medicamento), con días de anticipación.",
       inputSchema: {
         idCampania,
+        idComercio,
         nombre: z.string().min(1),
         diferenciaDias: z.number().int().min(0).optional(),
         activo: z.boolean().optional(),
@@ -52,7 +54,7 @@ export function registerSuscripcionesTools(server: McpServer, client: WibiClient
             diferenciaDias: args.diferenciaDias,
             activo: args.activo,
           },
-          campaniaParam(client, args.idCampania)
+          scopeParams(client, args)
         );
         return jsonResult(data);
       } catch (e) {
@@ -69,6 +71,7 @@ export function registerSuscripcionesTools(server: McpServer, client: WibiClient
         "Crea una suscripción para un cliente (día del mes, tipo de alerta y productos opcionales). Valida cliente y tipo de alerta del comercio.",
       inputSchema: {
         idCampania,
+        idComercio,
         idCliente: z.number().int().positive(),
         idTipoAlerta: z.number().int().positive(),
         dia: z.number().int().min(1).max(31),
@@ -97,7 +100,7 @@ export function registerSuscripcionesTools(server: McpServer, client: WibiClient
             notas: args.notas,
             productos: args.productos ?? [],
           },
-          campaniaParam(client, args.idCampania)
+          scopeParams(client, args)
         );
         return jsonResult(data);
       } catch (e) {
@@ -111,12 +114,12 @@ export function registerSuscripcionesTools(server: McpServer, client: WibiClient
     {
       title: "Consultar suscripciones",
       description: "Lista las suscripciones del comercio autenticado.",
-      inputSchema: { idCampania },
+      inputSchema: { idCampania, idComercio },
       annotations: READONLY,
     },
     async (args) => {
       try {
-        const data = await client.get("suscripciones", campaniaParam(client, args.idCampania));
+        const data = await client.get("suscripciones", scopeParams(client, args));
         return jsonResult(data);
       } catch (e) {
         return errorResult(e);

@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { WibiClient } from "../wibiClient.js";
-import { campaniaParam, errorResult, jsonResult } from "./helpers.js";
+import { errorResult, jsonResult, scopeParams } from "./helpers.js";
 
 const READONLY = {
   readOnlyHint: true,
@@ -16,6 +16,7 @@ const idCampania = z
   .positive()
   .optional()
   .describe("Campaña a consultar. Opcional si el comercio opera una sola campaña.");
+const idComercio = z.number().int().positive().optional().describe("Filtro opcional por comercio.");
 
 /**
  * Herramientas de Fase 1: Clasificación / comportamiento del cliente.
@@ -30,6 +31,7 @@ export function registerComportamientoTools(server: McpServer, client: WibiClien
       inputSchema: {
         idCliente: z.number().int().positive(),
         idCampania,
+        idComercio,
       },
       annotations: READONLY,
     },
@@ -37,7 +39,7 @@ export function registerComportamientoTools(server: McpServer, client: WibiClien
       try {
         const data = await client.get(
           `clientes/${args.idCliente}/comportamiento`,
-          campaniaParam(client, args.idCampania)
+          scopeParams(client, args)
         );
         return jsonResult(data);
       } catch (e) {
@@ -52,12 +54,12 @@ export function registerComportamientoTools(server: McpServer, client: WibiClien
       title: "Listar análisis de clientes",
       description:
         "Lista las definiciones de análisis/segmentación de clientes disponibles en la campaña (metadata).",
-      inputSchema: { idCampania },
+      inputSchema: { idCampania, idComercio },
       annotations: READONLY,
     },
     async (args) => {
       try {
-        const data = await client.get("analisis-clientes", campaniaParam(client, args.idCampania));
+        const data = await client.get("analisis-clientes", scopeParams(client, args));
         return jsonResult(data);
       } catch (e) {
         return errorResult(e);

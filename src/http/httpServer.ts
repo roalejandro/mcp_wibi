@@ -413,9 +413,10 @@ export async function startHttpServer(
     const session = req.auth?.extra?.session as WibiSession | undefined;
     const ownerSessionId = req.auth?.extra?.sessionId as string | undefined;
     if (!session || !ownerSessionId) return false;
-    // La sesión MCP queda ligada al sessionId OAuth + IdComercio del login.
-    // Un Bearer de otro comercio (u otra familia OAuth) no puede reutilizar el Mcp-Session-Id.
+    // La sesión MCP queda ligada al sessionId OAuth. Solo las sesiones comercio
+    // quedan además vinculadas a un IdComercio fijo.
     if (ownerSessionId !== bound.ownerSessionId) return false;
+    if (session.scopeMode === "admin") return true;
     if (session.idComercio !== bound.idComercio) return false;
     return true;
   };
@@ -495,6 +496,10 @@ export async function startHttpServer(
               livingSession.refreshToken = refreshed.session.refreshToken;
               livingSession.tokenExpiryMs = refreshed.session.tokenExpiryMs;
               livingSession.campanias = refreshed.session.campanias;
+              livingSession.scopeMode = refreshed.session.scopeMode ?? livingSession.scopeMode;
+              livingSession.permisos = refreshed.session.permisos ?? livingSession.permisos;
+              livingSession.preferredIdComercio =
+                refreshed.session.preferredIdComercio ?? livingSession.preferredIdComercio;
               provider.updateSessionForAccessToken(accessToken, livingSession);
               return {
                 accessToken: refreshed.session.wibiToken,
@@ -504,6 +509,7 @@ export async function startHttpServer(
             },
           }
         );
+        userClient.setPreferredIdComercio(livingSession.preferredIdComercio);
 
         const transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => randomUUID(),
@@ -519,11 +525,11 @@ export async function startHttpServer(
           if (transport.sessionId) delete transports[transport.sessionId];
         };
 
-        // Solo disponible si el login original fue de un admin del panel (impersonación).
-        // Permite cambiar de comercio/campaña dentro de la misma sesión MCP sin relogin.
+        // Solo disponible para administradores. Fija preferencias de consulta sin
+        // convertir el JWT admin en una sesión de comercio.
         // Importante: Laravel /auth/my-* y /auth/switch-scope esperan el JWT WIBI
         // (livingSession.wibiToken), NO el access token OAuth de Claude (accessToken).
-        const scope = livingSession.actor
+        const scope = livingSession.scopeMode === "admin"
           ? {
               listComercios: async (idCampania: number) => {
                 const result = await auth.myScopedComercios(
@@ -564,7 +570,10 @@ export async function startHttpServer(
                 livingSession.nombreComercio = switched.session.nombreComercio;
                 livingSession.idRed = switched.session.idRed;
                 livingSession.campanias = switched.session.campanias;
-                livingSession.defaultCampania = switched.session.defaultCampania;
+                livingSession.defaultCampania = idCampania;
+                livingSession.preferredIdComercio = idComercio;
+                livingSession.scopeMode = switched.session.scopeMode ?? livingSession.scopeMode;
+                livingSession.permisos = switched.session.permisos ?? livingSession.permisos;
                 livingSession.wibiToken = switched.session.wibiToken;
                 livingSession.refreshToken = switched.session.refreshToken;
                 livingSession.tokenExpiryMs = switched.session.tokenExpiryMs;
@@ -574,22 +583,25 @@ export async function startHttpServer(
                   refreshToken: switched.session.refreshToken,
                   expiresAtMs: switched.session.tokenExpiryMs,
                 });
-                userClient.setDefaultCampania(switched.session.defaultCampania);
+                userClient.setDefaultCampania(idCampania);
+                userClient.setPreferredIdComercio(idComercio);
 
                 provider.updateSessionForAccessToken(accessToken, livingSession);
                 if (transport.sessionId) {
                   const bound = transports[transport.sessionId];
-                  if (bound) bound.idComercio = livingSession.idComercio;
+                  if (bound) bound.idComercio = livingSession.scopeMode === "admin" ? 0 : livingSession.idComercio;
                 }
 
                 return {
                   comercio: {
-                    idComercio: livingSession.idComercio,
-                    nombre: livingSession.nombreComercio,
+                    idComercio,
+                    nombre: livingSession.idComercio === idComercio
+                      ? livingSession.nombreComercio
+                      : `Comercio ${idComercio}`,
                     idRed: livingSession.idRed,
                   },
                   campanias: livingSession.campanias,
-                  defaultCampania: livingSession.defaultCampania,
+                  defaultCampania: idCampania,
                 };
               },
             }
@@ -604,6 +616,8 @@ export async function startHttpServer(
             idRed: livingSession.idRed,
           },
           actor: livingSession.actor,
+          scopeMode: livingSession.scopeMode,
+          permisos: livingSession.permisos,
           scope,
         });
         await mcp.connect(transport);

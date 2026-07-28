@@ -1,5 +1,5 @@
 /**
- * Páginas OAuth WIBI: credenciales, OTP 2FA y selector campaña/comercio.
+ * Páginas OAuth WIBI: credenciales, OTP 2FA y selector legado campaña/comercio.
  */
 
 import type { Response } from "express";
@@ -157,7 +157,7 @@ export function renderLoginPage(res: Response, opts: RenderLoginOptions, status 
       body: `<form method="post" action="/oauth/approve" autocomplete="on" id="login-form">
     <div class="brand">WIBI</div>
     <h1>Iniciar sesión</h1>
-    <p><span class="app">${clientName}</span> quiere acceder a tu comercio WIBI.</p>
+    <p><span class="app">${clientName}</span> quiere acceder a tu cuenta WIBI.</p>
     ${errorHtml}
     <label for="user">Usuario</label>
     <input id="user" name="user" type="text" autocomplete="username" autofocus required />

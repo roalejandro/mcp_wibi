@@ -8,11 +8,12 @@ import { z } from "zod";
 import type { WibiClient } from "./wibiClient.js";
 import type { ActorInfo, CampaniaInfo, ComercioInfo } from "./wibiAuth.js";
 import { VERSION } from "./version.js";
-import { errorResult, jsonResult } from "./tools/helpers.js";
+import { can, errorResult, jsonResult } from "./tools/helpers.js";
 import { registerInformesTools } from "./tools/informes.js";
 import { registerComportamientoTools } from "./tools/comportamiento.js";
 import { registerDifusionesTools } from "./tools/difusiones.js";
 import { registerSuscripcionesTools } from "./tools/suscripciones.js";
+import { registerExportTools } from "./tools/export.js";
 
 export interface ScopeInfo {
   comercio: { idComercio: number; nombre: string; idRed: number };
@@ -54,6 +55,8 @@ export interface BuildServerOptions {
   actor?: ActorInfo;
   /** Solo se registra cuando `actor` está presente: permite cambiar de comercio sin relogin. */
   scope?: ScopeSwitcher;
+  scopeMode?: "admin" | "comercio";
+  permisos?: Record<string, string[]>;
 }
 
 export function buildMcpServer(client: WibiClient, opts: BuildServerOptions = {}): McpServer {
@@ -76,7 +79,7 @@ export function buildMcpServer(client: WibiClient, opts: BuildServerOptions = {}
       {
         title: "Mis campañas",
         description:
-          "Lista las campañas WIBI a las que la sesión actual tiene acceso (id y nombre) y el comercio activo. Usá idCampania en los demás tools si hay más de una. Si `es_admin` es true, esto solo muestra la campaña del comercio activo (no todo tu alcance de admin): usá wibi_buscar_campanias para encontrar otras campañas por nombre, wibi_comercios_de_campania para ver sus comercios, y wibi_cambiar_comercio para operar otro comercio sin volver a iniciar sesión.",
+          "Lista las campañas WIBI a las que la sesión actual tiene acceso. Un admin ve todas sus campañas y las consultas incluyen por defecto todos los comercios permitidos de cada campaña; puede aplicar un filtro opcional con idComercio.",
         inputSchema: {},
       },
       async () =>
@@ -84,12 +87,12 @@ export function buildMcpServer(client: WibiClient, opts: BuildServerOptions = {}
           comercio: state.comercio ?? null,
           default_campania: state.defaultCampania ?? client.defaultCampania ?? null,
           campanias: state.campanias,
-          es_admin: Boolean(opts.actor),
+          es_admin: opts.scopeMode === "admin",
         })
     );
   }
 
-  if (opts.actor && opts.scope) {
+  if (opts.scopeMode === "admin" && opts.scope) {
     const { listComercios, listCampanias, switchScope } = opts.scope;
 
     server.registerTool(
@@ -135,7 +138,7 @@ export function buildMcpServer(client: WibiClient, opts: BuildServerOptions = {}
       {
         title: "Comercios de una campaña",
         description:
-          "Lista los comercios de una campaña WIBI dentro de tu alcance de administrador. Usalo antes de wibi_cambiar_comercio para saber qué idComercio pasar.",
+          "Lista los comercios de una campaña WIBI dentro de tu alcance de administrador. Usalo para conocer un idComercio y aplicarlo como filtro opcional en las consultas o exports.",
         inputSchema: {
           idCampania: z.number().int().positive().describe("Campaña a consultar."),
         },
@@ -155,7 +158,7 @@ export function buildMcpServer(client: WibiClient, opts: BuildServerOptions = {}
       {
         title: "Cambiar de comercio",
         description:
-          "Cambia el comercio y la campaña activos de esta sesión, sin volver a pedir credenciales ni 2FA (solo disponible para administradores del panel WIBI impersonando un comercio). A partir de la respuesta, todos los demás tools operan sobre el nuevo comercio.",
+          "Fija la campaña por defecto y una preferencia opcional de filtro idComercio, sin volver a pedir credenciales ni 2FA. No impersona ni restringe la sesión admin: podés reemplazar u omitir idComercio en cada consulta.",
         inputSchema: {
           idCampania: z.number().int().positive(),
           idComercio: z.number().int().positive(),
@@ -167,6 +170,8 @@ export function buildMcpServer(client: WibiClient, opts: BuildServerOptions = {}
           state.comercio = nuevoAlcance.comercio;
           state.campanias = nuevoAlcance.campanias;
           state.defaultCampania = nuevoAlcance.defaultCampania;
+          client.setDefaultCampania(nuevoAlcance.defaultCampania);
+          client.setPreferredIdComercio(nuevoAlcance.comercio.idComercio);
 
           return jsonResult({
             ok: true,
@@ -180,10 +185,48 @@ export function buildMcpServer(client: WibiClient, opts: BuildServerOptions = {}
     );
   }
 
-  registerInformesTools(server, client);
-  registerComportamientoTools(server, client);
-  registerDifusionesTools(server, client);
-  registerSuscripcionesTools(server, client);
+  // Mapeo alineado a WibiPermissionService / comun/menu_opciones del panel.
+  const toolPermissions: Record<string, [string, string, string?]> = {
+    wibi_listar_movimientos: ["campania", "movimientos"],
+    wibi_detalle_movimiento: ["campania", "movimientos"],
+    wibi_buscar_clientes: ["campania", "clientes"],
+    wibi_cliente_comportamiento: ["campania", "clientes"],
+    wibi_analisis_clientes: ["campania", "analisis"],
+    wibi_listar_productos: ["configuracion", "productos"],
+    wibi_listar_clasificadores: ["campania", "clientes"],
+    wibi_listar_marcas: ["configuracion", "marcas"],
+    wibi_listar_segmentos: ["configuracion", "segmentosproductos"],
+    wibi_listar_tags: ["configuracion", "etiquetas"],
+    wibi_listar_cupones: ["campania", "cupones"],
+    wibi_detalle_cupon: ["campania", "cupones"],
+    wibi_asignar_tags: ["whatsapp", "difusiones"],
+    wibi_crear_plantilla_whatsapp: ["whatsapp", "difusiones"],
+    wibi_programar_difusion: ["whatsapp", "difusiones"],
+    wibi_consultar_difusiones: ["whatsapp", "difusiones"],
+    wibi_detalle_difusion: ["whatsapp", "difusiones"],
+    wibi_crear_tipo_alerta: ["configuracion", "tiposalerta"],
+    wibi_crear_suscripcion: ["campania", "suscripciones"],
+    wibi_consultar_suscripciones: ["campania", "suscripciones"],
+    wibi_exportar_clientes: ["campania", "clientes", "exportar"],
+    wibi_exportar_movimientos: ["campania", "movimientos", "exportar"],
+  };
+  const permissionedServer = new Proxy(server, {
+    get(target, property, receiver) {
+      if (property !== "registerTool") return Reflect.get(target, property, receiver);
+      return (name: string, ...args: unknown[]) => {
+        const permission = toolPermissions[name];
+        if (!permission || can(opts.permisos, permission[0], permission[1], permission[2])) {
+          return (target.registerTool as (...toolArgs: unknown[]) => unknown)(name, ...args);
+        }
+      };
+    },
+  }) as McpServer;
+
+  registerInformesTools(permissionedServer, client);
+  registerComportamientoTools(permissionedServer, client);
+  registerDifusionesTools(permissionedServer, client);
+  registerSuscripcionesTools(permissionedServer, client);
+  registerExportTools(permissionedServer, client);
 
   return server;
 }
