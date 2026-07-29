@@ -30,11 +30,14 @@ const idComercio = z
   .optional()
   .describe("Filtro opcional por comercio para sesiones admin.");
 
-const colorHex = z
+const colorInput = z
   .string()
-  .regex(/^#[0-9A-Fa-f]{6}$/, "El color debe tener formato hexadecimal #RRGGBB")
+  .min(1)
+  .max(50)
   .optional()
-  .describe("Color hexadecimal #RRGGBB. Default #000000 al crear.");
+  .describe(
+    "Color por nombre (rojo, azul, verde, naranja, rosa, etc.) o hexadecimal #RRGGBB. Default negro al crear."
+  );
 
 /**
  * ABM de etiquetas (Configuración → Etiquetas).
@@ -76,13 +79,13 @@ export function registerTagsTools(server: McpServer, client: WibiClient): void {
     {
       title: "Crear etiqueta (tag)",
       description:
-        "Crea una nueva etiqueta en la campaña (Configuración → Etiquetas). El título se normaliza (espacios → _). No asigna el tag a clientes.",
+        "Crea una nueva etiqueta en la campaña (Configuración → Etiquetas). El título se normaliza (espacios → _). Color por nombre (rojo, azul…) o #RRGGBB. No asigna el tag a clientes.",
       inputSchema: {
         idCampania,
         idComercio,
         titulo: z.string().min(1).describe("Título de la etiqueta (requerido)."),
         descripcion: z.string().optional().describe("Descripción opcional."),
-        color: colorHex,
+        color: colorInput,
       },
       annotations: WRITE,
     },
@@ -109,14 +112,14 @@ export function registerTagsTools(server: McpServer, client: WibiClient): void {
     {
       title: "Modificar etiqueta (tag)",
       description:
-        "Modifica título, descripción y/o color de una etiqueta existente. Debés indicar al menos un campo. El tag debe pertenecer a la campaña.",
+        "Modifica título, descripción y/o color de una etiqueta existente. Debés indicar al menos un campo. Color acepta nombre (rojo, azul…) o #RRGGBB.",
       inputSchema: {
         idCampania,
         idComercio,
         idTag: z.number().int().positive().describe("ID de la etiqueta a modificar."),
         titulo: z.string().min(1).optional(),
         descripcion: z.string().optional(),
-        color: colorHex,
+        color: colorInput,
       },
       annotations: WRITE,
     },
