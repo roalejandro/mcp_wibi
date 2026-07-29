@@ -94,7 +94,7 @@ export function registerInformesTools(server: McpServer, client: WibiClient): vo
     {
       title: "Buscar clientes",
       description:
-        "Busca/lista clientes de la campaña por nombre, DNI, tarjeta o email, con filtros por categoría y segmento.",
+        "Busca/lista clientes de la campaña por nombre, DNI, tarjeta o email, con filtros por categoría, segmento y tags. Cada ítem incluye Tags[]. Para filtrar por etiquetas usá wibi_listar_tags y pasá idTags (OR: al menos uno).",
       inputSchema: {
         idCampania,
         idComercio,
@@ -102,6 +102,11 @@ export function registerInformesTools(server: McpServer, client: WibiClient): vo
         idCategoria: z.number().int().positive().optional(),
         idGrupoInteres: z.number().int().positive().optional(),
         activo: z.number().int().min(0).max(1).optional(),
+        idTags: z
+          .array(z.number().int().positive())
+          .min(1)
+          .optional()
+          .describe("Filtrar clientes con al menos uno de estos IdTag (OR). Obtener IDs con wibi_listar_tags."),
         page: z.number().int().positive().optional(),
         perPage: z.number().int().positive().max(200).optional(),
       },
@@ -115,6 +120,7 @@ export function registerInformesTools(server: McpServer, client: WibiClient): vo
           idCategoria: args.idCategoria,
           idGrupoInteres: args.idGrupoInteres,
           activo: args.activo,
+          ...(args.idTags?.length ? { idTags: args.idTags.join(",") } : {}),
           page: args.page,
           perPage: args.perPage,
         });

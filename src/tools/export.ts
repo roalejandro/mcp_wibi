@@ -32,7 +32,8 @@ export function registerExportTools(server: McpServer, client: WibiClient): void
     "wibi_exportar_clientes",
     {
       title: "Exportar clientes",
-      description: "Exporta clientes filtrados de la campaña en CSV, Excel o PDF.",
+      description:
+        "Exporta clientes filtrados de la campaña en CSV, Excel o PDF. Acepta idTags (OR) igual que wibi_buscar_clientes; no agrega columna de tags al archivo.",
       inputSchema: {
         idCampania,
         idComercio,
@@ -41,6 +42,11 @@ export function registerExportTools(server: McpServer, client: WibiClient): void
         idCategoria: z.number().int().positive().optional(),
         idGrupoInteres: z.number().int().positive().optional(),
         activo: z.number().int().min(0).max(1).optional(),
+        idTags: z
+          .array(z.number().int().positive())
+          .min(1)
+          .optional()
+          .describe("Filtrar clientes con al menos uno de estos IdTag (OR)."),
       },
     },
     async (args) => {
@@ -53,6 +59,7 @@ export function registerExportTools(server: McpServer, client: WibiClient): void
             idCategoria: args.idCategoria,
             idGrupoInteres: args.idGrupoInteres,
             activo: args.activo,
+            ...(args.idTags?.length ? { idTags: args.idTags.join(",") } : {}),
           })
         );
       } catch (error) {
