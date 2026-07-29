@@ -188,7 +188,7 @@ export class WibiClient {
   }
 
   private async request<T>(
-    method: "GET" | "POST",
+    method: "GET" | "POST" | "PATCH",
     path: string,
     options: { query?: Record<string, unknown>; body?: unknown } = {},
     isRetry = false
@@ -297,5 +297,9 @@ export class WibiClient {
 
   post<T = unknown>(path: string, body?: unknown, query?: Record<string, unknown>): Promise<T> {
     return this.request<T>("POST", path, { body, query });
+  }
+
+  patch<T = unknown>(path: string, body?: unknown, query?: Record<string, unknown>): Promise<T> {
+    return this.request<T>("PATCH", path, { body, query });
   }
 }

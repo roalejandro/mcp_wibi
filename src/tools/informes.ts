@@ -213,24 +213,6 @@ export function registerInformesTools(server: McpServer, client: WibiClient): vo
   );
 
   server.registerTool(
-    "wibi_listar_tags",
-    {
-      title: "Listar etiquetas (tags)",
-      description: "Lista las etiquetas/tags disponibles en la campaña para clasificar clientes.",
-      inputSchema: { idCampania, idComercio },
-      annotations: READONLY,
-    },
-    async (args) => {
-      try {
-        const data = await client.get("tags", scopeParams(client, args));
-        return jsonResult(data);
-      } catch (e) {
-        return errorResult(e);
-      }
-    }
-  );
-
-  server.registerTool(
     "wibi_listar_cupones",
     {
       title: "Listar cupones",

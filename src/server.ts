@@ -14,6 +14,7 @@ import { registerComportamientoTools } from "./tools/comportamiento.js";
 import { registerDifusionesTools } from "./tools/difusiones.js";
 import { registerSuscripcionesTools } from "./tools/suscripciones.js";
 import { registerExportTools } from "./tools/export.js";
+import { registerTagsTools } from "./tools/tags.js";
 
 export interface ScopeInfo {
   comercio: { idComercio: number; nombre: string; idRed: number };
@@ -196,7 +197,9 @@ export function buildMcpServer(client: WibiClient, opts: BuildServerOptions = {}
     wibi_listar_clasificadores: ["campania", "clientes"],
     wibi_listar_marcas: ["configuracion", "marcas"],
     wibi_listar_segmentos: ["configuracion", "segmentosproductos"],
-    wibi_listar_tags: ["configuracion", "etiquetas"],
+    wibi_listar_tags: ["configuracion", "etiquetas", "consultar"],
+    wibi_crear_tag: ["configuracion", "etiquetas", "insertar"],
+    wibi_modificar_tag: ["configuracion", "etiquetas", "modificar"],
     wibi_listar_cupones: ["campania", "cupones"],
     wibi_detalle_cupon: ["campania", "cupones"],
     wibi_asignar_tags: ["whatsapp", "difusiones"],
@@ -227,6 +230,7 @@ export function buildMcpServer(client: WibiClient, opts: BuildServerOptions = {}
   registerDifusionesTools(permissionedServer, client);
   registerSuscripcionesTools(permissionedServer, client);
   registerExportTools(permissionedServer, client);
+  registerTagsTools(permissionedServer, client);
 
   return server;
 }
