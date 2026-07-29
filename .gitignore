@@ -4,3 +4,7 @@ dist/
 *.log
 .DS_Store
 PLAN.md
+
+.cred_backup_local.json
+.cred_backup_local.txt
+.testadmin_rol_backup.json

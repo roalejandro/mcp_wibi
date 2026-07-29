@@ -31,6 +31,13 @@ export interface HttpConfig {
   trustProxy: boolean | number | string;
 }
 
+export type OauthStoreMode = "memory" | "redis";
+
+export interface OauthStoreConfig {
+  mode: OauthStoreMode;
+  redisUrl?: string;
+}
+
 function requireEnv(name: string): string {
   const value = process.env[name];
   if (!value || value.trim() === "") {
@@ -116,4 +123,28 @@ function parseTrustProxy(raw: string | undefined): boolean | number | string {
   if (value === "false") return false;
   if (/^\d+$/.test(value)) return Number.parseInt(value, 10);
   return value;
+}
+
+/**
+ * Store OAuth: memory (dev local) o redis (producción / Docker).
+ * En modo redis falla al arrancar si falta REDIS_URL (fail-fast, sin fallback).
+ */
+export function loadOauthStoreConfig(): OauthStoreConfig {
+  const raw = (process.env.OAUTH_STORE || "memory").trim().toLowerCase();
+  if (raw !== "memory" && raw !== "redis") {
+    console.error(`ERROR: OAUTH_STORE debe ser "memory" o "redis", recibido: "${raw}"`);
+    process.exit(1);
+  }
+
+  if (raw === "memory") {
+    return { mode: "memory" };
+  }
+
+  const redisUrl = process.env.REDIS_URL?.trim();
+  if (!redisUrl) {
+    console.error("ERROR: OAUTH_STORE=redis requiere REDIS_URL");
+    process.exit(1);
+  }
+
+  return { mode: "redis", redisUrl };
 }

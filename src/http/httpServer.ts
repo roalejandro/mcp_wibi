@@ -15,12 +15,17 @@ import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middlew
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 
-import type { ConnectionConfig, HttpConfig } from "../config.js";
+import {
+  loadOauthStoreConfig,
+  type ConnectionConfig,
+  type HttpConfig,
+} from "../config.js";
 import { WibiAuthService, type WibiSession } from "../wibiAuth.js";
 import { WibiClient } from "../wibiClient.js";
 import { buildMcpServer } from "../server.js";
 import { VERSION } from "../version.js";
-import { InMemoryOAuthProvider } from "./oauthProvider.js";
+import { WibiOAuthProvider } from "./oauthProvider.js";
+import { createOauthStore } from "./oauthStore.js";
 import {
   renderLoginPage,
   renderOtpPage,
@@ -137,7 +142,8 @@ export async function startHttpServer(
   conn: ConnectionConfig,
   config: HttpConfig
 ): Promise<void> {
-  const provider = new InMemoryOAuthProvider(config.accessTokenTtl);
+  const oauthStore = await createOauthStore(loadOauthStoreConfig());
+  const provider = new WibiOAuthProvider(config.accessTokenTtl, oauthStore);
   const auth = new WibiAuthService(conn);
   const issuerUrl = new URL(config.publicUrl);
   const resourceMetadataUrl = getOAuthProtectedResourceMetadataUrl(new URL(config.publicUrl));
@@ -500,7 +506,7 @@ export async function startHttpServer(
               livingSession.permisos = refreshed.session.permisos ?? livingSession.permisos;
               livingSession.preferredIdComercio =
                 refreshed.session.preferredIdComercio ?? livingSession.preferredIdComercio;
-              provider.updateSessionForAccessToken(accessToken, livingSession);
+              await provider.updateSessionForAccessToken(accessToken, livingSession);
               return {
                 accessToken: refreshed.session.wibiToken,
                 refreshToken: refreshed.session.refreshToken,
@@ -586,7 +592,7 @@ export async function startHttpServer(
                 userClient.setDefaultCampania(idCampania);
                 userClient.setPreferredIdComercio(idComercio);
 
-                provider.updateSessionForAccessToken(accessToken, livingSession);
+                await provider.updateSessionForAccessToken(accessToken, livingSession);
                 if (transport.sessionId) {
                   const bound = transports[transport.sessionId];
                   if (bound) bound.idComercio = livingSession.scopeMode === "admin" ? 0 : livingSession.idComercio;
@@ -676,14 +682,24 @@ export async function startHttpServer(
     next(err);
   });
 
-  await new Promise<void>((resolve) => {
-    app.listen(config.port, config.host, () => resolve());
+  const server = await new Promise<import("node:http").Server>((resolve) => {
+    const httpServer = app.listen(config.port, config.host, () => resolve(httpServer));
   });
+
+  const shutdown = async (signal: string) => {
+    console.error(`[wibi-mcp-gateway] ${signal}: cerrando...`);
+    server.close();
+    await oauthStore.close();
+    process.exit(0);
+  };
+  process.once("SIGTERM", () => void shutdown("SIGTERM"));
+  process.once("SIGINT", () => void shutdown("SIGINT"));
 
   console.error(
     `[wibi-mcp-gateway] HTTP escuchando en ${config.host}:${config.port}\n` +
       `[wibi-mcp-gateway] issuer/público: ${config.publicUrl}\n` +
       `[wibi-mcp-gateway] endpoint MCP:   ${config.publicUrl}/mcp\n` +
+      `[wibi-mcp-gateway] OAuth store:    ${oauthStore.kind}\n` +
       `[wibi-mcp-gateway] login por comercio contra ${conn.baseUrl}/onzecrm/v2/auth/login`
   );
 }

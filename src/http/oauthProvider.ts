@@ -1,11 +1,8 @@
 /**
  * Authorization Server OAuth 2.1 para el MCP remoto multi-tenant de WIBI.
  *
- * Mejoras respecto al puerto literal de emozion-mcp:
- *  - Solicitudes de autorización opacas server-side (auth_request_id)
- *  - Solo scope "mcp"
- *  - Refresh tokens con expiración + rotación
- *  - Limpieza periódica / tope de mapas en memoria
+ * Clients DCR + access/refresh (+ WibiSession) viven en OAuthTokenStore
+ * (memoria o Redis). Auth requests/codes siguen en memoria (TTL corto).
  */
 
 import { createHash, randomBytes, randomUUID } from "node:crypto";
@@ -21,6 +18,8 @@ import type {
 
 import type { WibiSession } from "../wibiAuth.js";
 import { renderLoginPage } from "./loginPage.js";
+import type { OAuthTokenStore } from "./oauthStore.js";
+import { MemoryOAuthStore } from "./oauthStore.js";
 
 const AUTH_CODE_TTL_MS = 5 * 60 * 1000;
 const AUTH_REQUEST_TTL_MS = 10 * 60 * 1000;
@@ -31,7 +30,7 @@ function token(bytes = 32): string {
   return randomBytes(bytes).toString("base64url");
 }
 
-function hashToken(value: string): string {
+export function hashToken(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
@@ -55,53 +54,40 @@ interface StoredAuthCode {
   expiresAt: number;
 }
 
-interface StoredAccessToken {
-  clientId: string;
-  scopes: string[];
-  resource?: string;
-  session: WibiSession;
-  expiresAt: number;
-  sessionId: string;
-}
-
-interface StoredRefreshToken {
-  clientId: string;
-  scopes: string[];
-  resource?: string;
-  session: WibiSession;
-  expiresAt: number;
-  sessionId: string;
-}
-
 export interface CompleteAuthorizationInput {
   authRequestId: string;
   session: WibiSession;
 }
 
-export class InMemoryOAuthProvider implements OAuthServerProvider {
-  private readonly clients = new Map<string, OAuthClientInformationFull>();
+export class WibiOAuthProvider implements OAuthServerProvider {
   private readonly authRequests = new Map<string, AuthRequest>();
   private readonly authCodes = new Map<string, StoredAuthCode>();
-  private readonly accessTokens = new Map<string, StoredAccessToken>();
-  private readonly refreshTokens = new Map<string, StoredRefreshToken>();
   private readonly refreshTtlMs: number;
+  private readonly store: OAuthTokenStore;
 
-  constructor(private readonly accessTokenTtlSeconds: number) {
+  constructor(
+    private readonly accessTokenTtlSeconds: number,
+    store?: OAuthTokenStore
+  ) {
+    this.store = store ?? new MemoryOAuthStore();
     // Refresh OAuth al menos tan largo como el access OAuth, máx 7 días.
     this.refreshTtlMs = Math.max(accessTokenTtlSeconds * 1000, 7 * 24 * 60 * 60 * 1000);
     setInterval(() => this.cleanup(), 5 * 60 * 1000).unref?.();
   }
 
+  get tokenStore(): OAuthTokenStore {
+    return this.store;
+  }
+
   readonly clientsStore: OAuthRegisteredClientsStore = {
-    getClient: (clientId) => this.clients.get(clientId),
-    registerClient: (client) => {
-      this.enforceCap(this.clients);
+    getClient: (clientId) => this.store.getClient(clientId),
+    registerClient: async (client) => {
       const full: OAuthClientInformationFull = {
         ...client,
         client_id: randomUUID(),
         client_id_issued_at: Math.floor(Date.now() / 1000),
       };
-      this.clients.set(full.client_id, full);
+      await this.store.setClient(full);
       return full;
     },
   };
@@ -210,17 +196,22 @@ export class InMemoryOAuthProvider implements OAuthServerProvider {
     resource?: URL
   ): Promise<OAuthTokens> {
     const key = hashToken(refreshToken);
-    const entry = this.refreshTokens.get(key);
-    if (!entry) throw new Error("Refresh token inválido");
+    const entry = await this.store.getRefresh(key);
+    if (!entry) {
+      console.error("[wibi-mcp-gateway] refresh token inexistente");
+      throw new Error("Refresh token inválido");
+    }
     if (entry.expiresAt < Date.now()) {
-      this.refreshTokens.delete(key);
+      await this.store.deleteRefresh(key);
+      console.error("[wibi-mcp-gateway] refresh token expirado");
       throw new Error("Refresh token expirado");
     }
     if (entry.clientId !== client.client_id) {
       throw new Error("El refresh token no pertenece a este cliente");
     }
 
-    this.refreshTokens.delete(key);
+    // Rotación: eliminar el refresh anterior (también limpia el índice de sesión).
+    await this.store.deleteRefresh(key);
 
     const grantedScopes = scopes && scopes.length > 0
       ? scopes.filter((s) => s === "mcp")
@@ -238,10 +229,14 @@ export class InMemoryOAuthProvider implements OAuthServerProvider {
 
   async verifyAccessToken(accessToken: string): Promise<AuthInfo> {
     const key = hashToken(accessToken);
-    const entry = this.accessTokens.get(key);
-    if (!entry) throw new Error("Access token inválido");
+    const entry = await this.store.getAccess(key);
+    if (!entry) {
+      console.error("[wibi-mcp-gateway] access token inexistente");
+      throw new Error("Access token inválido");
+    }
     if (entry.expiresAt < Date.now()) {
-      this.accessTokens.delete(key);
+      await this.store.deleteAccess(key);
+      console.error("[wibi-mcp-gateway] access token expirado");
       throw new Error("Access token expirado");
     }
     return {
@@ -262,58 +257,80 @@ export class InMemoryOAuthProvider implements OAuthServerProvider {
     request: OAuthTokenRevocationRequest
   ): Promise<void> {
     const key = hashToken(request.token);
-    this.accessTokens.delete(key);
-    this.refreshTokens.delete(key);
+    await this.store.deleteAccess(key);
+    await this.store.deleteRefresh(key);
   }
 
   /**
    * Actualiza la sesión WIBI enlazada a un access token OAuth (tras refresh WIBI)
-   * y a todos los refresh tokens de la misma sessionId.
+   * y a todos los refresh tokens de la misma sessionId (vía índice, sin SCAN).
    */
-  updateSessionForAccessToken(accessToken: string, session: WibiSession): void {
+  async updateSessionForAccessToken(accessToken: string, session: WibiSession): Promise<void> {
     const key = hashToken(accessToken);
-    const entry = this.accessTokens.get(key);
+    const entry = await this.store.getAccess(key);
     if (!entry) return;
-    entry.session = session;
-    for (const refresh of this.refreshTokens.values()) {
-      if (refresh.sessionId === entry.sessionId) {
-        refresh.session = session;
+
+    const accessTtlMs = Math.max(1, entry.expiresAt - Date.now());
+    await this.store.setAccess(
+      key,
+      { ...entry, session },
+      accessTtlMs
+    );
+
+    const refreshHashes = await this.store.listSessionRefreshHashes(entry.sessionId);
+    for (const refreshHash of refreshHashes) {
+      const refresh = await this.store.getRefresh(refreshHash);
+      if (!refresh) {
+        await this.store.removeSessionRefresh(entry.sessionId, refreshHash);
+        continue;
       }
+      const refreshTtlMs = Math.max(1, refresh.expiresAt - Date.now());
+      await this.store.setRefresh(
+        refreshHash,
+        { ...refresh, session },
+        refreshTtlMs
+      );
     }
   }
 
-  private issueTokens(
+  private async issueTokens(
     clientId: string,
     scopes: string[],
     session: WibiSession,
     resource?: string,
     existingSessionId?: string
-  ): OAuthTokens {
+  ): Promise<OAuthTokens> {
     const accessToken = token(32);
     const refreshToken = token(32);
     const sessionId = existingSessionId ?? randomUUID();
     const accessExpiresAt = Date.now() + this.accessTokenTtlSeconds * 1000;
     const refreshExpiresAt = Date.now() + this.refreshTtlMs;
+    const accessTtlMs = this.accessTokenTtlSeconds * 1000;
 
-    this.enforceCap(this.accessTokens);
-    this.enforceCap(this.refreshTokens);
-
-    this.accessTokens.set(hashToken(accessToken), {
-      clientId,
-      scopes,
-      resource,
-      session,
-      expiresAt: accessExpiresAt,
-      sessionId,
-    });
-    this.refreshTokens.set(hashToken(refreshToken), {
-      clientId,
-      scopes,
-      resource,
-      session,
-      expiresAt: refreshExpiresAt,
-      sessionId,
-    });
+    await this.store.setAccess(
+      hashToken(accessToken),
+      {
+        clientId,
+        scopes,
+        resource,
+        session,
+        expiresAt: accessExpiresAt,
+        sessionId,
+      },
+      accessTtlMs
+    );
+    await this.store.setRefresh(
+      hashToken(refreshToken),
+      {
+        clientId,
+        scopes,
+        resource,
+        session,
+        expiresAt: refreshExpiresAt,
+        sessionId,
+      },
+      this.refreshTtlMs
+    );
 
     return {
       access_token: accessToken,
@@ -338,11 +355,8 @@ export class InMemoryOAuthProvider implements OAuthServerProvider {
     for (const [k, v] of this.authCodes) {
       if (v.expiresAt < now) this.authCodes.delete(k);
     }
-    for (const [k, v] of this.accessTokens) {
-      if (v.expiresAt < now) this.accessTokens.delete(k);
-    }
-    for (const [k, v] of this.refreshTokens) {
-      if (v.expiresAt < now) this.refreshTokens.delete(k);
-    }
   }
 }
+
+/** Alias de compatibilidad con el nombre anterior. */
+export { WibiOAuthProvider as InMemoryOAuthProvider };
