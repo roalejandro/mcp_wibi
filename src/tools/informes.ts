@@ -129,13 +129,35 @@ export function registerInformesTools(server: McpServer, client: WibiClient): vo
     "wibi_listar_productos",
     {
       title: "Listar productos",
-      description: "Lista productos del catálogo de la red del comercio.",
+      description:
+        "Lista productos del catálogo de la red del comercio. Cada ítem incluye Marca, Segmentos y clasificadores tipados (Laboratorio, Rubro, Subrubro, Droga, AccionTerapeutica).",
       inputSchema: {
         idCampania,
         idComercio,
         buscar: z.string().optional(),
         soloActivos: z.boolean().optional(),
         idMarca: z.number().int().positive().optional(),
+        idSegmento: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("Filtrar por segmento de producto (ver wibi_listar_segmentos_productos)."),
+        idLaboratorio: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("Filtrar por clasificador tipo Laboratorio (1)."),
+        idRubro: z.number().int().positive().optional().describe("Filtrar por Rubro (tipo 2)."),
+        idSubrubro: z.number().int().positive().optional().describe("Filtrar por Subrubro (tipo 3)."),
+        idDroga: z.number().int().positive().optional().describe("Filtrar por Droga (tipo 4)."),
+        idAccionTerapeutica: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("Filtrar por Acción terapéutica (tipo 5)."),
         page: z.number().int().positive().optional(),
         perPage: z.number().int().positive().max(200).optional(),
       },
@@ -148,6 +170,12 @@ export function registerInformesTools(server: McpServer, client: WibiClient): vo
           buscar: args.buscar,
           soloActivos: args.soloActivos,
           idMarca: args.idMarca,
+          idSegmento: args.idSegmento,
+          idLaboratorio: args.idLaboratorio,
+          idRubro: args.idRubro,
+          idSubrubro: args.idSubrubro,
+          idDroga: args.idDroga,
+          idAccionTerapeutica: args.idAccionTerapeutica,
           page: args.page,
           perPage: args.perPage,
         });
@@ -162,13 +190,26 @@ export function registerInformesTools(server: McpServer, client: WibiClient): vo
     "wibi_listar_clasificadores",
     {
       title: "Listar clasificadores",
-      description: "Lista los clasificadores de productos de la red del comercio.",
-      inputSchema: { idCampania, idComercio },
+      description:
+        "Lista los clasificadores de productos de la red. Tipos: 1=Laboratorio, 2=Rubro, 3=Subrubro, 4=Droga, 5=Acción terapéutica.",
+      inputSchema: {
+        idCampania,
+        idComercio,
+        idTipoClasificador: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("Filtrar por tipo: 1 laboratorio, 2 rubro, 3 subrubro, 4 droga, 5 acción terapéutica."),
+      },
       annotations: READONLY,
     },
     async (args) => {
       try {
-        const data = await client.get("clasificadores", scopeParams(client, args));
+        const data = await client.get("clasificadores", {
+          ...scopeParams(client, args),
+          ...(args.idTipoClasificador ? { idTipoClasificador: args.idTipoClasificador } : {}),
+        });
         return jsonResult(data);
       } catch (e) {
         return errorResult(e);
@@ -198,13 +239,33 @@ export function registerInformesTools(server: McpServer, client: WibiClient): vo
     "wibi_listar_segmentos",
     {
       title: "Listar segmentos",
-      description: "Lista los segmentos (grupos de interés) de la campaña.",
+      description:
+        "Lista los segmentos de clientes (grupos de interés) de la campaña. Para segmentos de producto usá wibi_listar_segmentos_productos.",
       inputSchema: { idCampania, idComercio },
       annotations: READONLY,
     },
     async (args) => {
       try {
         const data = await client.get("segmentos", scopeParams(client, args));
+        return jsonResult(data);
+      } catch (e) {
+        return errorResult(e);
+      }
+    }
+  );
+
+  server.registerTool(
+    "wibi_listar_segmentos_productos",
+    {
+      title: "Listar segmentos de producto",
+      description:
+        "Lista los segmentos de producto (Configuración → Segmentos de productos) de la red del comercio. Usalo para filtrar wibi_listar_productos con idSegmento.",
+      inputSchema: { idCampania, idComercio },
+      annotations: READONLY,
+    },
+    async (args) => {
+      try {
+        const data = await client.get("segmentos-productos", scopeParams(client, args));
         return jsonResult(data);
       } catch (e) {
         return errorResult(e);

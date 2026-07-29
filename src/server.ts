@@ -197,6 +197,7 @@ export function buildMcpServer(client: WibiClient, opts: BuildServerOptions = {}
     wibi_listar_clasificadores: ["campania", "clientes"],
     wibi_listar_marcas: ["configuracion", "marcas"],
     wibi_listar_segmentos: ["configuracion", "segmentosproductos"],
+    wibi_listar_segmentos_productos: ["configuracion", "segmentosproductos", "consultar"],
     wibi_listar_tags: ["configuracion", "etiquetas", "consultar"],
     wibi_crear_tag: ["configuracion", "etiquetas", "insertar"],
     wibi_modificar_tag: ["configuracion", "etiquetas", "modificar"],
