@@ -15,6 +15,7 @@ import { registerDifusionesTools } from "./tools/difusiones.js";
 import { registerSuscripcionesTools } from "./tools/suscripciones.js";
 import { registerExportTools } from "./tools/export.js";
 import { registerTagsTools } from "./tools/tags.js";
+import { informesCampaniaPermissionMap, registerInformesCampaniaTools } from "./tools/informesCampania.js";
 
 export interface ScopeInfo {
   comercio: { idComercio: number; nombre: string; idRed: number };
@@ -213,6 +214,7 @@ export function buildMcpServer(client: WibiClient, opts: BuildServerOptions = {}
     wibi_consultar_suscripciones: ["campania", "suscripciones"],
     wibi_exportar_clientes: ["campania", "clientes", "exportar"],
     wibi_exportar_movimientos: ["campania", "movimientos", "exportar"],
+    ...informesCampaniaPermissionMap(),
   };
   const permissionedServer = new Proxy(server, {
     get(target, property, receiver) {
@@ -227,6 +229,7 @@ export function buildMcpServer(client: WibiClient, opts: BuildServerOptions = {}
   }) as McpServer;
 
   registerInformesTools(permissionedServer, client);
+  registerInformesCampaniaTools(permissionedServer, client);
   registerComportamientoTools(permissionedServer, client);
   registerDifusionesTools(permissionedServer, client);
   registerSuscripcionesTools(permissionedServer, client);

@@ -21,6 +21,20 @@ export interface BinaryResponse {
 export type TokenRefresher = (refreshToken: string) => Promise<TokenBundle>;
 
 /**
+ * Desempaqueta el envelope v2 `{ success: true, data }` y deja intactas
+ * las respuestas crudas de informes (que traen su propia clave `data`).
+ */
+export function unwrapWibiPayload(obj: Record<string, unknown>): unknown {
+  if (obj.success === true && "data" in obj) {
+    const extra = Object.keys(obj).filter((key) => key !== "success" && key !== "data");
+    if (extra.length === 0) {
+      return obj.data;
+    }
+  }
+  return obj;
+}
+
+/**
  * Cliente HTTP del API WIBI.
  *
  * Modos:
@@ -241,7 +255,7 @@ export class WibiClient {
       throw new Error(`Error API WIBI (HTTP ${res.status})`);
     }
 
-    return (obj?.data ?? obj) as T;
+    return unwrapWibiPayload(obj) as T;
   }
 
   get<T = unknown>(path: string, query?: Record<string, unknown>): Promise<T> {
