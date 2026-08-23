@@ -14,9 +14,9 @@ import {
   loadStdioAuth,
   resolveTransport,
 } from "./config.js";
-import { WibiClient } from "./wibiClient.js";
 import { buildMcpServer } from "./server.js";
 import { startHttpServer } from "./http/httpServer.js";
+import { createStdioRuntime } from "./stdioSession.js";
 
 async function main(): Promise<void> {
   const transport = resolveTransport(process.argv.slice(2));
@@ -27,14 +27,16 @@ async function main(): Promise<void> {
     return;
   }
 
-  const auth = loadStdioAuth();
-  const client = new WibiClient({ ...conn, ...auth });
-  const server = buildMcpServer(client);
+  const creds = loadStdioAuth();
+  const runtime = await createStdioRuntime(conn, creds);
+  const server = buildMcpServer(runtime.client, runtime.serverOpts);
   const stdio = new StdioServerTransport();
   await server.connect(stdio);
+  const actor = runtime.session.actor?.nombre ?? creds.user;
+  const modo = runtime.session.scopeMode ?? "comercio";
   console.error(
-    `[wibi-mcp-gateway] stdio conectado. base=${conn.baseUrl}` +
-      (auth.defaultCampania ? ` campania=${auth.defaultCampania}` : "")
+    `[wibi-mcp-gateway] stdio conectado. base=${conn.baseUrl} modo=${modo} actor=${actor}` +
+      (runtime.serverOpts.defaultCampania ? ` campania=${runtime.serverOpts.defaultCampania}` : "")
   );
 }
 
