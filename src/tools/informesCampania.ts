@@ -1,38 +1,15 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { z } from "zod";
 import type { WibiClient } from "../wibiClient.js";
-import { errorResult, jsonResult, scopeParams } from "./helpers.js";
+import {
+  informesPermissionMap,
+  registerInformeTools,
+  type InformePermiso,
+  type InformeToolDef,
+} from "./informesRegistry.js";
 
-const READONLY = {
-  readOnlyHint: true,
-  destructiveHint: false,
-  idempotentHint: true,
-  openWorldHint: true,
-};
+export type { InformePermiso };
 
-const idCampania = z
-  .number()
-  .int()
-  .positive()
-  .optional()
-  .describe("Campaña a consultar. Opcional si el comercio opera una sola campaña.");
-const idComercio = z
-  .number()
-  .int()
-  .positive()
-  .optional()
-  .describe("Filtro opcional por comercio para sesiones admin.");
-const fechaDesde = z.string().optional().describe("YYYY-MM-DD. Usar junto con fechaHasta.");
-const fechaHasta = z.string().optional().describe("YYYY-MM-DD. Usar junto con fechaDesde.");
-
-export type InformePermiso = "informacion" | "informes";
-
-export interface InformeCampaniaTool {
-  name: string;
-  title: string;
-  description: string;
-  path: string;
-  permiso: InformePermiso;
+export interface InformeCampaniaTool extends InformeToolDef {
   fechas: boolean;
 }
 
@@ -157,36 +134,9 @@ export const INFORMES_CAMPANIA_TOOLS: InformeCampaniaTool[] = [
 ];
 
 export function informesCampaniaPermissionMap(): Record<string, [string, string]> {
-  return Object.fromEntries(
-    INFORMES_CAMPANIA_TOOLS.map((tool) => [tool.name, ["campania", tool.permiso]])
-  );
+  return informesPermissionMap(INFORMES_CAMPANIA_TOOLS);
 }
 
 export function registerInformesCampaniaTools(server: McpServer, client: WibiClient): void {
-  for (const tool of INFORMES_CAMPANIA_TOOLS) {
-    server.registerTool(
-      tool.name,
-      {
-        title: tool.title,
-        description: tool.description,
-        inputSchema: tool.fechas
-          ? { idCampania, idComercio, fechaDesde, fechaHasta }
-          : { idCampania, idComercio },
-        annotations: READONLY,
-      },
-      async (args: { idCampania?: number; idComercio?: number; fechaDesde?: string; fechaHasta?: string }) => {
-        try {
-          const data = await client.get(tool.path, {
-            ...scopeParams(client, args),
-            ...(tool.fechas
-              ? { fechaDesde: args.fechaDesde, fechaHasta: args.fechaHasta }
-              : {}),
-          });
-          return jsonResult(data);
-        } catch (e) {
-          return errorResult(e);
-        }
-      }
-    );
-  }
+  registerInformeTools(server, client, INFORMES_CAMPANIA_TOOLS);
 }
