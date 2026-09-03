@@ -26,6 +26,7 @@ import { buildMcpServer } from "../server.js";
 import { VERSION } from "../version.js";
 import { WibiOAuthProvider } from "./oauthProvider.js";
 import { createOauthStore } from "./oauthStore.js";
+import { resolveMcpSessionAction } from "./mcpSession.js";
 import {
   renderLoginPage,
   renderOtpPage,
@@ -437,7 +438,12 @@ export async function startHttpServer(
         const sessionId = req.headers["mcp-session-id"] as string | undefined;
         let bound: BoundTransport | undefined = sessionId ? transports[sessionId] : undefined;
 
-        if (bound) {
+        const sessionAction = resolveMcpSessionAction({
+          hasBoundTransport: Boolean(bound),
+          isInitialize: isInitializeRequest(req.body),
+        });
+
+        if (sessionAction === "handle_existing" && bound) {
           if (!assertOwner(req, bound)) {
             res.status(401).json({
               jsonrpc: "2.0",
@@ -450,12 +456,14 @@ export async function startHttpServer(
           return;
         }
 
-        if (sessionId || !isInitializeRequest(req.body)) {
-          res.status(400).json({
+        if (sessionAction === "not_found") {
+          // Streamable HTTP: 404 para que el cliente reintente initialize
+          // con el mismo Bearer OAuth, sin relogin.
+          res.status(404).json({
             jsonrpc: "2.0",
             error: {
               code: -32000,
-              message: "Sesión no encontrada o falta la petición initialize.",
+              message: "Sesión MCP no encontrada. Reintentá initialize.",
             },
             id: null,
           });
@@ -645,7 +653,7 @@ export async function startHttpServer(
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
     const bound = sessionId ? transports[sessionId] : undefined;
     if (!bound) {
-      res.status(400).send("Falta o es inválido el header Mcp-Session-Id");
+      res.status(404).send("Sesión MCP no encontrada. Reintentá initialize.");
       return;
     }
     if (!assertOwner(req, bound)) {

@@ -152,6 +152,7 @@ Cuando exista el DNS, puedo:
 Notas:
 
 - Clients DCR + tokens OAuth + `WibiSession` se persisten en Redis (`OAUTH_STORE=redis` en Docker). Los transports MCP siguen en memoria del proceso.
+- Si Claude reenvía un `mcp-session-id` que ya no está en RAM, `initialize` abre un transport nuevo y el resto responde HTTP 404 para reintentar initialize **sin** relogin OAuth.
 - Una sola réplica hoy; Redis deja la puerta abierta a multi-réplica. Un recreate ya no debería pedir reconectar Claude.
 - HTTPS obligatorio (las credenciales viajan por el formulario).
 - El gateway nunca guarda usuario/clave del comercio; solo JWT corto + refresh token opaco (en Redis en producción).
