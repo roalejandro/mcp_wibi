@@ -107,13 +107,20 @@ export function registerDifusionesTools(server: McpServer, client: WibiClient): 
     {
       title: "Programar difusión",
       description:
-        "Programa una difusión (cabecera + destinatarios) para una fecha/hora. Valida que los clientes pertenezcan al comercio.",
+        "Programa una difusión (cabecera + destinatarios) para una fecha/hora. Valida que los clientes pertenezcan al comercio. El límite diario de WhatsApp es 1-1000; si se omite, la API usa 1000.",
       inputSchema: {
         idCampania,
         idComercio,
         nombre: z.string().min(1),
         fechaHora: z.string().optional().describe("YYYY-MM-DD HH:mm:ss"),
         idClientes: z.array(z.number().int().positive()).optional(),
+        limiteDiario: z
+          .number()
+          .int()
+          .min(1)
+          .max(1000)
+          .optional()
+          .describe("Tope diario de envíos WhatsApp (1-1000). Si se omite, la API usa 1000."),
       },
       annotations: WRITE,
     },
@@ -125,6 +132,7 @@ export function registerDifusionesTools(server: McpServer, client: WibiClient): 
             nombre: args.nombre,
             fechaHora: args.fechaHora,
             idClientes: args.idClientes ?? [],
+            ...(args.limiteDiario !== undefined ? { limiteDiario: args.limiteDiario } : {}),
           },
           scopeParams(client, args)
         );
