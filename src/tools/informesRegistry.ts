@@ -29,7 +29,7 @@ export const informeFechaDesde = z
 export const informeFechaHasta = z
   .string()
   .optional()
-  .describe("YYYY-MM-DD. Usar junto con fechaHasta.");
+  .describe("YYYY-MM-DD. Usar junto con fechaDesde.");
 export const informeDias = z
   .number()
   .int()

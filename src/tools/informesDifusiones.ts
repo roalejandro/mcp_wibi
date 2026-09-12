@@ -6,14 +6,14 @@ import {
   type InformeToolDef,
 } from "./informesRegistry.js";
 
-const DIFUSION_FILTROS = { dias: true, origenes: true };
-const DIFUSION_SERIE = { dias: true, origenes: true, agrupacion: true };
+const DIFUSION_FILTROS = { dias: true, fechas: true, origenes: true };
+const DIFUSION_SERIE = { dias: true, fechas: true, origenes: true, agrupacion: true };
 
 export const INFORMES_DIFUSIONES_TOOLS: InformeToolDef[] = [
   {
     name: "wibi_informe_difusiones_metricas_wa",
     title: "Informe: métricas WhatsApp",
-    description: "KPIs de difusiones WhatsApp (enviados, entregados, leídos, clics) de los últimos N días.",
+    description: "KPIs de difusiones WhatsApp (enviados, entregados, leídos, clics). Acepta dias o fechaDesde/fechaHasta (las fechas tienen precedencia).",
     path: "informes/difusionesmetricaswa",
     permiso: "informes",
     params: DIFUSION_FILTROS,
@@ -37,7 +37,7 @@ export const INFORMES_DIFUSIONES_TOOLS: InformeToolDef[] = [
   {
     name: "wibi_informe_difusiones_tabla_wa",
     title: "Informe: tabla WhatsApp",
-    description: "Detalle de campañas/envíos WhatsApp en la ventana de días.",
+    description: "Detalle de campañas/envíos WhatsApp. Acepta dias o fechaDesde/fechaHasta (las fechas tienen precedencia).",
     path: "informes/difusionestablawa",
     permiso: "informes",
     params: DIFUSION_FILTROS,
@@ -61,7 +61,7 @@ export const INFORMES_DIFUSIONES_TOOLS: InformeToolDef[] = [
   {
     name: "wibi_informe_difusiones_metricas_email",
     title: "Informe: métricas email",
-    description: "KPIs de difusiones email de los últimos N días.",
+    description: "KPIs de difusiones email. Acepta dias o fechaDesde/fechaHasta (las fechas tienen precedencia).",
     path: "informes/difusionesmetricasemail",
     permiso: "informes",
     params: DIFUSION_FILTROS,
@@ -77,7 +77,7 @@ export const INFORMES_DIFUSIONES_TOOLS: InformeToolDef[] = [
   {
     name: "wibi_informe_difusiones_tabla_email",
     title: "Informe: tabla email",
-    description: "Detalle de campañas/envíos email en la ventana de días.",
+    description: "Detalle de campañas/envíos email. Acepta dias o fechaDesde/fechaHasta (las fechas tienen precedencia).",
     path: "informes/difusionestablaemail",
     permiso: "informes",
     params: DIFUSION_FILTROS,
@@ -85,10 +85,10 @@ export const INFORMES_DIFUSIONES_TOOLS: InformeToolDef[] = [
   {
     name: "wibi_informe_difusiones_adherencia",
     title: "Informe: adherencia crónica",
-    description: "Adherencia a tratamientos/crónicos a partir de las difusiones. Solo usa dias.",
+    description: "Adherencia a tratamientos/crónicos a partir de las difusiones. Acepta dias o fechaDesde/fechaHasta (las fechas tienen precedencia).",
     path: "informes/difusionesadherenciacronica",
     permiso: "informes",
-    params: { dias: true },
+    params: { dias: true, fechas: true },
   },
 ];
 
