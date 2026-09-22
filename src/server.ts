@@ -15,6 +15,15 @@ import { registerDifusionesTools } from "./tools/difusiones.js";
 import { registerSuscripcionesTools } from "./tools/suscripciones.js";
 import { registerExportTools } from "./tools/export.js";
 import { registerTagsTools } from "./tools/tags.js";
+import { informesCampaniaPermissionMap, registerInformesCampaniaTools } from "./tools/informesCampania.js";
+import { informesMarcasPermissionMap, registerInformesMarcasTools } from "./tools/informesMarcas.js";
+import { informesDifusionesPermissionMap, registerInformesDifusionesTools } from "./tools/informesDifusiones.js";
+import { informesObjetivosPermissionMap, registerInformesObjetivosTools } from "./tools/informesObjetivos.js";
+import { informesMetaPermissionMap, registerInformesMetaTools } from "./tools/informesMeta.js";
+import {
+  informesVentasDetallePermissionMap,
+  registerInformesVentasDetalleTools,
+} from "./tools/informesVentasDetalle.js";
 
 export interface ScopeInfo {
   comercio: { idComercio: number; nombre: string; idRed: number };
@@ -213,6 +222,12 @@ export function buildMcpServer(client: WibiClient, opts: BuildServerOptions = {}
     wibi_consultar_suscripciones: ["campania", "suscripciones"],
     wibi_exportar_clientes: ["campania", "clientes", "exportar"],
     wibi_exportar_movimientos: ["campania", "movimientos", "exportar"],
+    ...informesCampaniaPermissionMap(),
+    ...informesMarcasPermissionMap(),
+    ...informesDifusionesPermissionMap(),
+    ...informesObjetivosPermissionMap(),
+    ...informesMetaPermissionMap(),
+    ...informesVentasDetallePermissionMap(),
   };
   const permissionedServer = new Proxy(server, {
     get(target, property, receiver) {
@@ -227,6 +242,12 @@ export function buildMcpServer(client: WibiClient, opts: BuildServerOptions = {}
   }) as McpServer;
 
   registerInformesTools(permissionedServer, client);
+  registerInformesCampaniaTools(permissionedServer, client);
+  registerInformesMarcasTools(permissionedServer, client);
+  registerInformesDifusionesTools(permissionedServer, client);
+  registerInformesObjetivosTools(permissionedServer, client);
+  registerInformesMetaTools(permissionedServer, client);
+  registerInformesVentasDetalleTools(permissionedServer, client);
   registerComportamientoTools(permissionedServer, client);
   registerDifusionesTools(permissionedServer, client);
   registerSuscripcionesTools(permissionedServer, client);

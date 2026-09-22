@@ -267,6 +267,51 @@ describe("WibiOAuthProvider + MemoryOAuthStore", () => {
     assert.deepEqual(await store.listSessionRefreshHashes(sessionId), []);
   });
 
+  it("access expirado no impide canjear el refresh persistido", async () => {
+    const store = new MemoryOAuthStore();
+    const provider = new WibiOAuthProvider(1, store);
+    const client = await registerClient(provider);
+    const sessionId = randomUUID();
+    const accessRaw = "short-access";
+    const refreshRaw = "long-refresh";
+    const session = sampleSession();
+
+    await store.setAccess(
+      hashToken(accessRaw),
+      {
+        clientId: client.client_id,
+        scopes: ["mcp"],
+        session,
+        expiresAt: Date.now() - 1_000,
+        sessionId,
+      },
+      1_000
+    );
+    await store.setRefresh(
+      hashToken(refreshRaw),
+      {
+        clientId: client.client_id,
+        scopes: ["mcp"],
+        session,
+        expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000,
+        sessionId,
+      },
+      7 * 24 * 60 * 60 * 1000
+    );
+
+    await assert.rejects(() => provider.verifyAccessToken(accessRaw), /Access token/);
+
+    const rotated = await provider.exchangeRefreshToken(client, refreshRaw);
+    assert.ok(rotated.access_token);
+    assert.ok(rotated.refresh_token);
+    assert.notEqual(rotated.access_token, accessRaw);
+    assert.notEqual(rotated.refresh_token, refreshRaw);
+
+    const verified = await provider.verifyAccessToken(rotated.access_token);
+    assert.equal(verified.clientId, client.client_id);
+    assert.equal((verified.extra as { session: WibiSession }).session.wibiToken, "jwt-wibi-1");
+  });
+
   it("rotación de refresh elimina el anterior y mantiene índice consistente", async () => {
     const store = new MemoryOAuthStore();
     const provider = new WibiOAuthProvider(3600, store);
