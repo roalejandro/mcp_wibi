@@ -76,6 +76,14 @@ export class WibiClient {
     this.applyBundle(bundle);
   }
 
+  /**
+   * JWT WIBI vigente. Renueva con el mismo refresher que las consultas del cliente
+   * antes de que otra llamada lo use por su cuenta.
+   */
+  getValidAccessToken(): Promise<string> {
+    return this.ensureToken();
+  }
+
   /** Actualiza la campaña por defecto (p. ej. tras un cambio de alcance de un admin). */
   setDefaultCampania(idCampania?: number): void {
     this.fixedDefaultCampania = idCampania;

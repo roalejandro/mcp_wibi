@@ -44,6 +44,18 @@ export interface OAuthTokenStore {
   removeSessionRefresh(sessionId: string, refreshHash: string): Promise<void>;
   listSessionRefreshHashes(sessionId: string): Promise<string[]>;
 
+  /** Índice de access hashes por sessionId, para invalidar la sesión sin SCAN. */
+  addSessionAccess(sessionId: string, accessHash: string, ttlMs: number): Promise<void>;
+  removeSessionAccess(sessionId: string, accessHash: string): Promise<void>;
+  listSessionAccessHashes(sessionId: string): Promise<string[]>;
+
+  /** Sesión WIBI canónica. Sobrevive a la expiración del access OAuth. */
+  getSession(sessionId: string): Promise<WibiSession | undefined>;
+  getSessionExpiresAt(sessionId: string): Promise<number | undefined>;
+  setSession(sessionId: string, session: WibiSession, ttlMs: number): Promise<void>;
+  deleteSession(sessionId: string): Promise<void>;
+  revokeSession(sessionId: string): Promise<void>;
+
   connect(): Promise<void>;
   close(): Promise<void>;
   readonly kind: "memory" | "redis";
@@ -61,8 +73,19 @@ function accessKey(hash: string): string {
 function refreshKey(hash: string): string {
   return `${PREFIX}:refresh:${hash}`;
 }
+function sessionKey(sessionId: string): string {
+  return `${PREFIX}:session:${sessionId}`;
+}
+function sessionAccessKey(sessionId: string): string {
+  return `${PREFIX}:session:${sessionId}:access`;
+}
 function sessionRefreshKey(sessionId: string): string {
   return `${PREFIX}:session:${sessionId}:refresh`;
+}
+
+interface StoredCanonicalSession {
+  session: WibiSession;
+  expiresAt: number;
 }
 const CLIENTS_INDEX = `${PREFIX}:clients`;
 
@@ -81,6 +104,8 @@ export class MemoryOAuthStore implements OAuthTokenStore {
   private readonly clients = new Map<string, OAuthClientInformationFull>();
   private readonly access = new Map<string, StoredAccessToken>();
   private readonly refresh = new Map<string, StoredRefreshToken>();
+  private readonly sessions = new Map<string, StoredCanonicalSession>();
+  private readonly sessionAccess = new Map<string, Set<string>>();
   private readonly sessionRefresh = new Map<string, Set<string>>();
 
   async connect(): Promise<void> {}
@@ -107,19 +132,22 @@ export class MemoryOAuthStore implements OAuthTokenStore {
     const entry = this.access.get(tokenHash);
     if (!entry) return undefined;
     if (entry.expiresAt < Date.now()) {
-      this.access.delete(tokenHash);
+      await this.deleteAccess(tokenHash);
       return undefined;
     }
     return entry;
   }
 
-  async setAccess(tokenHash: string, entry: StoredAccessToken, _ttlMs: number): Promise<void> {
+  async setAccess(tokenHash: string, entry: StoredAccessToken, ttlMs: number): Promise<void> {
     enforceMapCap(this.access);
     this.access.set(tokenHash, entry);
+    await this.addSessionAccess(entry.sessionId, tokenHash, ttlMs);
   }
 
   async deleteAccess(tokenHash: string): Promise<void> {
+    const entry = this.access.get(tokenHash);
     this.access.delete(tokenHash);
+    if (entry) await this.removeSessionAccess(entry.sessionId, tokenHash);
   }
 
   async getRefresh(tokenHash: string): Promise<StoredRefreshToken | undefined> {
@@ -165,6 +193,69 @@ export class MemoryOAuthStore implements OAuthTokenStore {
 
   async listSessionRefreshHashes(sessionId: string): Promise<string[]> {
     return [...(this.sessionRefresh.get(sessionId) ?? [])];
+  }
+
+  async addSessionAccess(sessionId: string, accessHash: string, _ttlMs: number): Promise<void> {
+    let set = this.sessionAccess.get(sessionId);
+    if (!set) {
+      set = new Set();
+      this.sessionAccess.set(sessionId, set);
+    }
+    set.add(accessHash);
+  }
+
+  async removeSessionAccess(sessionId: string, accessHash: string): Promise<void> {
+    const set = this.sessionAccess.get(sessionId);
+    if (!set) return;
+    set.delete(accessHash);
+    if (set.size === 0) this.sessionAccess.delete(sessionId);
+  }
+
+  async listSessionAccessHashes(sessionId: string): Promise<string[]> {
+    return [...(this.sessionAccess.get(sessionId) ?? [])];
+  }
+
+  async getSession(sessionId: string): Promise<WibiSession | undefined> {
+    const stored = this.readSession(sessionId);
+    return stored?.session;
+  }
+
+  async getSessionExpiresAt(sessionId: string): Promise<number | undefined> {
+    return this.readSession(sessionId)?.expiresAt;
+  }
+
+  async setSession(sessionId: string, session: WibiSession, ttlMs: number): Promise<void> {
+    enforceMapCap(this.sessions);
+    this.sessions.set(sessionId, {
+      session,
+      expiresAt: Date.now() + Math.max(1, ttlMs),
+    });
+  }
+
+  async deleteSession(sessionId: string): Promise<void> {
+    this.sessions.delete(sessionId);
+  }
+
+  async revokeSession(sessionId: string): Promise<void> {
+    for (const hash of await this.listSessionAccessHashes(sessionId)) {
+      this.access.delete(hash);
+    }
+    for (const hash of await this.listSessionRefreshHashes(sessionId)) {
+      this.refresh.delete(hash);
+    }
+    this.sessionAccess.delete(sessionId);
+    this.sessionRefresh.delete(sessionId);
+    this.sessions.delete(sessionId);
+  }
+
+  private readSession(sessionId: string): StoredCanonicalSession | undefined {
+    const stored = this.sessions.get(sessionId);
+    if (!stored) return undefined;
+    if (stored.expiresAt < Date.now()) {
+      this.sessions.delete(sessionId);
+      return undefined;
+    }
+    return stored;
   }
 }
 
@@ -244,10 +335,19 @@ export class RedisOAuthStore implements OAuthTokenStore {
     await this.client.set(accessKey(tokenHash), JSON.stringify(entry), {
       EX: ttlSecondsFromMs(ttlMs),
     });
+    await this.addSessionAccess(entry.sessionId, tokenHash, ttlMs);
   }
 
   async deleteAccess(tokenHash: string): Promise<void> {
+    let sessionId: string | undefined;
+    try {
+      const raw = await this.client.get(accessKey(tokenHash));
+      if (raw) sessionId = (JSON.parse(raw) as StoredAccessToken).sessionId;
+    } catch {
+      // El borrado sigue aunque el valor no se pueda leer.
+    }
     await this.client.del(accessKey(tokenHash));
+    if (sessionId) await this.removeSessionAccess(sessionId, tokenHash);
   }
 
   async getRefresh(tokenHash: string): Promise<StoredRefreshToken | undefined> {
@@ -292,7 +392,7 @@ export class RedisOAuthStore implements OAuthTokenStore {
   async addSessionRefresh(sessionId: string, refreshHash: string, ttlMs: number): Promise<void> {
     const key = sessionRefreshKey(sessionId);
     await this.client.sAdd(key, refreshHash);
-    await this.client.expire(key, ttlSecondsFromMs(ttlMs));
+    await this.extendIndexTtl(key, ttlMs);
   }
 
   async removeSessionRefresh(sessionId: string, refreshHash: string): Promise<void> {
@@ -302,6 +402,79 @@ export class RedisOAuthStore implements OAuthTokenStore {
 
   async listSessionRefreshHashes(sessionId: string): Promise<string[]> {
     return this.client.sMembers(sessionRefreshKey(sessionId));
+  }
+
+  async addSessionAccess(sessionId: string, accessHash: string, ttlMs: number): Promise<void> {
+    const key = sessionAccessKey(sessionId);
+    await this.client.sAdd(key, accessHash);
+    await this.extendIndexTtl(key, ttlMs);
+  }
+
+  async removeSessionAccess(sessionId: string, accessHash: string): Promise<void> {
+    await this.client.sRem(sessionAccessKey(sessionId), accessHash);
+  }
+
+  async listSessionAccessHashes(sessionId: string): Promise<string[]> {
+    return this.client.sMembers(sessionAccessKey(sessionId));
+  }
+
+  async getSession(sessionId: string): Promise<WibiSession | undefined> {
+    return (await this.readSession(sessionId))?.session;
+  }
+
+  async getSessionExpiresAt(sessionId: string): Promise<number | undefined> {
+    return (await this.readSession(sessionId))?.expiresAt;
+  }
+
+  async setSession(sessionId: string, session: WibiSession, ttlMs: number): Promise<void> {
+    const stored: StoredCanonicalSession = {
+      session,
+      expiresAt: Date.now() + Math.max(1, ttlMs),
+    };
+    await this.client.set(sessionKey(sessionId), JSON.stringify(stored), {
+      EX: ttlSecondsFromMs(ttlMs),
+    });
+  }
+
+  async deleteSession(sessionId: string): Promise<void> {
+    await this.client.del(sessionKey(sessionId));
+  }
+
+  async revokeSession(sessionId: string): Promise<void> {
+    const accessHashes = await this.listSessionAccessHashes(sessionId);
+    const refreshHashes = await this.listSessionRefreshHashes(sessionId);
+    const keys = [
+      ...accessHashes.map(accessKey),
+      ...refreshHashes.map(refreshKey),
+      sessionKey(sessionId),
+      sessionAccessKey(sessionId),
+      sessionRefreshKey(sessionId),
+    ];
+    if (keys.length > 0) await this.client.del(keys);
+  }
+
+  private async readSession(sessionId: string): Promise<StoredCanonicalSession | undefined> {
+    try {
+      const raw = await this.client.get(sessionKey(sessionId));
+      if (!raw) return undefined;
+      const stored = JSON.parse(raw) as StoredCanonicalSession;
+      if (!stored?.session || stored.expiresAt < Date.now()) {
+        await this.deleteSession(sessionId);
+        return undefined;
+      }
+      return stored;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[wibi-mcp-gateway] error de deserialización de sesión: ${message}`);
+      return undefined;
+    }
+  }
+
+  /** No acorta un índice que todavía referencia tokens más nuevos. */
+  private async extendIndexTtl(key: string, ttlMs: number): Promise<void> {
+    const next = ttlSecondsFromMs(ttlMs);
+    const current = await this.client.ttl(key);
+    if (current < next) await this.client.expire(key, next);
   }
 }
 

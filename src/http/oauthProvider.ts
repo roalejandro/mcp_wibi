@@ -20,6 +20,7 @@ import type { WibiSession } from "../wibiAuth.js";
 import { renderLoginPage } from "./loginPage.js";
 import type { OAuthTokenStore } from "./oauthStore.js";
 import { MemoryOAuthStore } from "./oauthStore.js";
+import { logSessionEvent } from "./sessionLog.js";
 
 const AUTH_CODE_TTL_MS = 5 * 60 * 1000;
 const AUTH_REQUEST_TTL_MS = 10 * 60 * 1000;
@@ -217,11 +218,12 @@ export class WibiOAuthProvider implements OAuthServerProvider {
       ? scopes.filter((s) => s === "mcp")
       : entry.scopes;
     const finalScopes = grantedScopes.length > 0 ? grantedScopes : DEFAULT_SCOPES;
+    const session = await this.resolveSession(entry.sessionId, entry.session);
 
     return this.issueTokens(
       client.client_id,
       finalScopes,
-      entry.session,
+      session,
       resource?.href ?? entry.resource,
       entry.sessionId
     );
@@ -239,15 +241,16 @@ export class WibiOAuthProvider implements OAuthServerProvider {
       console.error("[wibi-mcp-gateway] access token expirado");
       throw new Error("Access token expirado");
     }
+    const session = await this.resolveSession(entry.sessionId, entry.session);
     return {
       token: accessToken,
       clientId: entry.clientId,
       scopes: entry.scopes,
       expiresAt: Math.floor(entry.expiresAt / 1000),
       extra: {
-        session: entry.session,
+        session,
         sessionId: entry.sessionId,
-        idComercio: entry.session.idComercio,
+        idComercio: session.idComercio,
       },
     };
   }
@@ -261,34 +264,64 @@ export class WibiOAuthProvider implements OAuthServerProvider {
     await this.store.deleteRefresh(key);
   }
 
+  async getSession(sessionId: string): Promise<WibiSession | undefined> {
+    return this.store.getSession(sessionId);
+  }
+
   /**
-   * Actualiza la sesión WIBI enlazada a un access token OAuth (tras refresh WIBI)
-   * y a todos los refresh tokens de la misma sessionId (vía índice, sin SCAN).
+   * Persiste la sesión WIBI canónica aunque el access OAuth que creó el transporte
+   * ya haya vencido. También refresca las copias embebidas que todavía existan.
    */
-  async updateSessionForAccessToken(accessToken: string, session: WibiSession): Promise<void> {
-    const key = hashToken(accessToken);
-    const entry = await this.store.getAccess(key);
-    if (!entry) return;
+  async updateSession(sessionId: string, session: WibiSession): Promise<void> {
+    const expiresAt = await this.store.getSessionExpiresAt(sessionId);
+    const ttlMs = expiresAt && expiresAt > Date.now()
+      ? expiresAt - Date.now()
+      : this.refreshTtlMs;
+    await this.store.setSession(sessionId, session, ttlMs);
+    await this.syncEmbedded(sessionId, session);
+    logSessionEvent(sessionId, "persist", "ok");
+  }
 
-    const accessTtlMs = Math.max(1, entry.expiresAt - Date.now());
-    await this.store.setAccess(
-      key,
-      { ...entry, session },
-      accessTtlMs
-    );
+  async revokeSession(sessionId: string): Promise<void> {
+    await this.store.revokeSession(sessionId);
+    logSessionEvent(sessionId, "invalidate", "store");
+  }
 
-    const refreshHashes = await this.store.listSessionRefreshHashes(entry.sessionId);
+  private async resolveSession(sessionId: string, fallback?: WibiSession): Promise<WibiSession> {
+    const current = await this.store.getSession(sessionId);
+    if (current) return current;
+    if (!fallback) throw new Error("Access token inválido");
+    await this.store.setSession(sessionId, fallback, this.refreshTtlMs);
+    logSessionEvent(sessionId, "migrate", "ok");
+    return fallback;
+  }
+
+  private async syncEmbedded(sessionId: string, session: WibiSession): Promise<void> {
+    const accessHashes = await this.store.listSessionAccessHashes(sessionId);
+    for (const accessHash of accessHashes) {
+      const access = await this.store.getAccess(accessHash);
+      if (!access) {
+        await this.store.removeSessionAccess(sessionId, accessHash);
+        continue;
+      }
+      await this.store.setAccess(
+        accessHash,
+        { ...access, session },
+        Math.max(1, access.expiresAt - Date.now())
+      );
+    }
+
+    const refreshHashes = await this.store.listSessionRefreshHashes(sessionId);
     for (const refreshHash of refreshHashes) {
       const refresh = await this.store.getRefresh(refreshHash);
       if (!refresh) {
-        await this.store.removeSessionRefresh(entry.sessionId, refreshHash);
+        await this.store.removeSessionRefresh(sessionId, refreshHash);
         continue;
       }
-      const refreshTtlMs = Math.max(1, refresh.expiresAt - Date.now());
       await this.store.setRefresh(
         refreshHash,
         { ...refresh, session },
-        refreshTtlMs
+        Math.max(1, refresh.expiresAt - Date.now())
       );
     }
   }
@@ -307,6 +340,7 @@ export class WibiOAuthProvider implements OAuthServerProvider {
     const refreshExpiresAt = Date.now() + this.refreshTtlMs;
     const accessTtlMs = this.accessTokenTtlSeconds * 1000;
 
+    await this.store.setSession(sessionId, session, this.refreshTtlMs);
     await this.store.setAccess(
       hashToken(accessToken),
       {

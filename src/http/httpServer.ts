@@ -4,6 +4,7 @@
  * Público objetivo: comercios WIBI no técnicos vía claude.ai / Claude Desktop.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import express, { type Request, type Response } from "express";
 import rateLimit from "express-rate-limit";
@@ -26,6 +27,10 @@ import { buildMcpServer } from "../server.js";
 import { VERSION } from "../version.js";
 import { WibiOAuthProvider } from "./oauthProvider.js";
 import { createOauthStore } from "./oauthStore.js";
+import { createAdminScope } from "./adminScope.js";
+import { WibiSessionCoordinator } from "./sessionRefresh.js";
+import { INVALID_TOKEN_BODY, installInvalidTokenOverride } from "./invalidTokenResponse.js";
+import { isWibiSessionExpired } from "../sessionErrors.js";
 import {
   renderLoginPage,
   renderOtpPage,
@@ -145,6 +150,10 @@ export async function startHttpServer(
   const oauthStore = await createOauthStore(loadOauthStoreConfig());
   const provider = new WibiOAuthProvider(config.accessTokenTtl, oauthStore);
   const auth = new WibiAuthService(conn);
+  const sessionSignals = new AsyncLocalStorage<{ expired: boolean }>();
+  const sessionRefresh = new WibiSessionCoordinator(provider, (refreshToken) =>
+    auth.refresh(refreshToken)
+  );
   const issuerUrl = new URL(config.publicUrl);
   const resourceMetadataUrl = getOAuthProtectedResourceMetadataUrl(new URL(config.publicUrl));
 
@@ -433,6 +442,9 @@ export async function startHttpServer(
     express.json({ limit: "1mb" }),
     bearer,
     async (req: Request, res: Response) => {
+      const signal = { expired: false };
+      installInvalidTokenOverride(res, signal);
+      await sessionSignals.run(signal, async () => {
       try {
         const sessionId = req.headers["mcp-session-id"] as string | undefined;
         let bound: BoundTransport | undefined = sessionId ? transports[sessionId] : undefined;
@@ -489,29 +501,22 @@ export async function startHttpServer(
               refreshToken: livingSession.refreshToken,
               expiresAtMs: livingSession.tokenExpiryMs,
             },
-            refresher: async (refreshToken) => {
-              const refreshed = await auth.refresh(refreshToken);
-              if (refreshed.kind !== "ok") {
-                throw new Error(
-                  refreshed.kind === "error"
-                    ? refreshed.message
-                    : "No se pudo renovar la sesión WIBI."
-                );
+            refresher: async () => {
+              try {
+                const refreshed = await sessionRefresh.refresh(ownerSessionId);
+                Object.assign(livingSession, refreshed);
+                return {
+                  accessToken: refreshed.wibiToken,
+                  refreshToken: refreshed.refreshToken,
+                  expiresAtMs: refreshed.tokenExpiryMs,
+                };
+              } catch (err) {
+                if (isWibiSessionExpired(err)) {
+                  const signal = sessionSignals.getStore();
+                  if (signal) signal.expired = true;
+                }
+                throw err;
               }
-              livingSession.wibiToken = refreshed.session.wibiToken;
-              livingSession.refreshToken = refreshed.session.refreshToken;
-              livingSession.tokenExpiryMs = refreshed.session.tokenExpiryMs;
-              livingSession.campanias = refreshed.session.campanias;
-              livingSession.scopeMode = refreshed.session.scopeMode ?? livingSession.scopeMode;
-              livingSession.permisos = refreshed.session.permisos ?? livingSession.permisos;
-              livingSession.preferredIdComercio =
-                refreshed.session.preferredIdComercio ?? livingSession.preferredIdComercio;
-              await provider.updateSessionForAccessToken(accessToken, livingSession);
-              return {
-                accessToken: refreshed.session.wibiToken,
-                refreshToken: refreshed.session.refreshToken,
-                expiresAtMs: refreshed.session.tokenExpiryMs,
-              };
             },
           }
         );
@@ -533,84 +538,19 @@ export async function startHttpServer(
 
         // Solo disponible para administradores. Fija preferencias de consulta sin
         // convertir el JWT admin en una sesión de comercio.
-        // Importante: Laravel /auth/my-* y /auth/switch-scope esperan el JWT WIBI
-        // (livingSession.wibiToken), NO el access token OAuth de Claude (accessToken).
+        // Las llamadas usan el JWT WIBI vigente, no el access token OAuth de Claude.
         const scope = livingSession.scopeMode === "admin"
-          ? {
-              listComercios: async (idCampania: number) => {
-                const result = await auth.myScopedComercios(
-                  livingSession.wibiToken,
-                  idCampania
-                );
-                if (result.kind === "error") {
-                  throw new Error(result.message);
-                }
-                return result.data.comercios;
+          ? createAdminScope({
+              auth,
+              client: userClient,
+              session: livingSession,
+              persist: (next) => provider.updateSession(ownerSessionId, next),
+              onCommerceChange: (idComercio) => {
+                if (!transport.sessionId) return;
+                const bound = transports[transport.sessionId];
+                if (bound) bound.idComercio = idComercio;
               },
-              listCampanias: async (opts?: {
-                q?: string;
-                page?: number;
-                perPage?: number;
-              }) => {
-                const result = await auth.misCampanias(livingSession.wibiToken, opts);
-                if (result.kind === "error") {
-                  throw new Error(result.message);
-                }
-                return result.data;
-              },
-              switchScope: async (idCampania: number, idComercio: number) => {
-                const switched = await auth.switchScope(
-                  livingSession.wibiToken,
-                  idCampania,
-                  idComercio
-                );
-                if (switched.kind !== "ok") {
-                  throw new Error(
-                    switched.kind === "error"
-                      ? switched.message
-                      : "No se pudo cambiar de comercio."
-                  );
-                }
-
-                livingSession.idComercio = switched.session.idComercio;
-                livingSession.nombreComercio = switched.session.nombreComercio;
-                livingSession.idRed = switched.session.idRed;
-                livingSession.campanias = switched.session.campanias;
-                livingSession.defaultCampania = idCampania;
-                livingSession.preferredIdComercio = idComercio;
-                livingSession.scopeMode = switched.session.scopeMode ?? livingSession.scopeMode;
-                livingSession.permisos = switched.session.permisos ?? livingSession.permisos;
-                livingSession.wibiToken = switched.session.wibiToken;
-                livingSession.refreshToken = switched.session.refreshToken;
-                livingSession.tokenExpiryMs = switched.session.tokenExpiryMs;
-
-                userClient.setSession({
-                  accessToken: switched.session.wibiToken,
-                  refreshToken: switched.session.refreshToken,
-                  expiresAtMs: switched.session.tokenExpiryMs,
-                });
-                userClient.setDefaultCampania(idCampania);
-                userClient.setPreferredIdComercio(idComercio);
-
-                await provider.updateSessionForAccessToken(accessToken, livingSession);
-                if (transport.sessionId) {
-                  const bound = transports[transport.sessionId];
-                  if (bound) bound.idComercio = livingSession.scopeMode === "admin" ? 0 : livingSession.idComercio;
-                }
-
-                return {
-                  comercio: {
-                    idComercio,
-                    nombre: livingSession.idComercio === idComercio
-                      ? livingSession.nombreComercio
-                      : `Comercio ${idComercio}`,
-                    idRed: livingSession.idRed,
-                  },
-                  campanias: livingSession.campanias,
-                  defaultCampania: idCampania,
-                };
-              },
-            }
+            })
           : undefined;
 
         const mcp = buildMcpServer(userClient, {
@@ -629,6 +569,11 @@ export async function startHttpServer(
         await mcp.connect(transport);
         await transport.handleRequest(req, res, req.body);
       } catch (err) {
+        if (isWibiSessionExpired(err) && !res.headersSent) {
+          res.setHeader("WWW-Authenticate", 'Bearer error="invalid_token"');
+          res.status(401).type("json").send(INVALID_TOKEN_BODY);
+          return;
+        }
         console.error("[wibi-mcp-gateway] error en POST /mcp:", err);
         if (!res.headersSent) {
           res.status(500).json({
@@ -638,10 +583,13 @@ export async function startHttpServer(
           });
         }
       }
+      });
     }
   );
 
   const handleSessionRequest = async (req: Request, res: Response) => {
+    const signal = { expired: false };
+    installInvalidTokenOverride(res, signal);
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
     const bound = sessionId ? transports[sessionId] : undefined;
     if (!bound) {
@@ -652,7 +600,7 @@ export async function startHttpServer(
       res.status(401).send("La sesión MCP no pertenece a este usuario.");
       return;
     }
-    await bound.transport.handleRequest(req, res);
+    await sessionSignals.run(signal, () => bound.transport.handleRequest(req, res));
   };
 
   app.get("/mcp", bearer, handleSessionRequest);

@@ -80,7 +80,7 @@ export function buildMcpServer(client: WibiClient, opts: BuildServerOptions = {}
       {
         title: "Mis campañas",
         description:
-          "Lista las campañas WIBI a las que la sesión actual tiene acceso. Un admin ve todas sus campañas y las consultas incluyen por defecto todos los comercios permitidos de cada campaña; puede aplicar un filtro opcional con idComercio.",
+          "Devuelve las campañas guardadas en esta sesión al conectarse o al cambiar de comercio. No consulta WIBI en ese momento. Para el listado actual del backend usá wibi_buscar_campanias. Un admin ve las campañas de la sesión y las consultas incluyen por defecto todos los comercios permitidos; puede aplicar un filtro opcional con idComercio.",
         inputSchema: {},
       },
       async () =>

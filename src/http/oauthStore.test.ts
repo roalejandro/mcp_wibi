@@ -77,6 +77,43 @@ describe("MemoryOAuthStore", () => {
     assert.equal(await store.getAccess(hash), undefined);
   });
 
+  it("guarda y revoca la sesión canónica con sus tokens", async () => {
+    const store = new MemoryOAuthStore();
+    const sessionId = randomUUID();
+    const session = sampleSession({ wibiToken: "jwt-canonico" });
+    await store.setSession(sessionId, session, 60_000);
+    assert.equal((await store.getSession(sessionId))?.wibiToken, "jwt-canonico");
+    assert.ok((await store.getSessionExpiresAt(sessionId))! > Date.now());
+
+    await store.setAccess(
+      "access-hash",
+      {
+        clientId: "c1",
+        scopes: ["mcp"],
+        session,
+        expiresAt: Date.now() + 60_000,
+        sessionId,
+      },
+      60_000
+    );
+    await store.setRefresh(
+      "refresh-hash",
+      {
+        clientId: "c1",
+        scopes: ["mcp"],
+        session,
+        expiresAt: Date.now() + 60_000,
+        sessionId,
+      },
+      60_000
+    );
+
+    await store.revokeSession(sessionId);
+    assert.equal(await store.getSession(sessionId), undefined);
+    assert.equal(await store.getAccess("access-hash"), undefined);
+    assert.equal(await store.getRefresh("refresh-hash"), undefined);
+  });
+
   it("persiste clientes DCR", async () => {
     const store = new MemoryOAuthStore();
     const clientId = randomUUID();

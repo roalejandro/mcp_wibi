@@ -1,4 +1,5 @@
 import type { WibiClient } from "../wibiClient.js";
+import { isWibiSessionExpired } from "../sessionErrors.js";
 
 /** Resultado de herramienta MCP en formato texto JSON. */
 export function jsonResult(data: unknown) {
@@ -12,8 +13,9 @@ export function jsonResult(data: unknown) {
   };
 }
 
-/** Resultado de error legible por el modelo. */
+/** Resultado de error legible por el modelo. Una sesión muerta no se disfraza de tool. */
 export function errorResult(error: unknown) {
+  if (isWibiSessionExpired(error)) throw error;
   const message = error instanceof Error ? error.message : String(error);
   return {
     isError: true,
