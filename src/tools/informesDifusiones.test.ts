@@ -48,4 +48,27 @@ describe("informes difusiones MCP", () => {
     assert.ok(!("origen" in (adherencia?.params ?? {})));
     assert.ok(!("agrupacion" in (adherencia?.params ?? {})));
   });
+
+  it("expone y serializa fechaDesde/fechaHasta en las 10 tools (precedencia sobre dias)", async () => {
+    const { names, schemas, calls } = await collectInformeTools(INFORMES_DIFUSIONES_TOOLS, {
+      idCampania: 482,
+      dias: 60,
+      fechaDesde: "2026-01-01",
+      fechaHasta: "2026-01-31",
+    });
+
+    assert.equal(names.length, 10);
+    for (const name of names) {
+      assert.ok("fechaDesde" in schemas[name], `${name} sin fechaDesde`);
+      assert.ok("fechaHasta" in schemas[name], `${name} sin fechaHasta`);
+      assert.ok("dias" in schemas[name], `${name} sin dias`);
+    }
+
+    for (const call of calls) {
+      assertNoUsuarioNiHmac(call.params);
+      assert.equal(call.params.fechaDesde, "2026-01-01");
+      assert.equal(call.params.fechaHasta, "2026-01-31");
+      assert.equal(call.params.dias, 60);
+    }
+  });
 });
