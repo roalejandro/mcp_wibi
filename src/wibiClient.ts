@@ -210,9 +210,9 @@ export class WibiClient {
   }
 
   private async request<T>(
-    method: "GET" | "POST" | "PATCH",
+    method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE",
     path: string,
-    options: { query?: Record<string, unknown>; body?: unknown } = {},
+    options: { query?: Record<string, unknown>; body?: unknown; timeoutMs?: number } = {},
     isRetry = false
   ): Promise<T> {
     const token = await this.ensureToken();
@@ -238,7 +238,7 @@ export class WibiClient {
         },
         body: options.body ? JSON.stringify(options.body) : undefined,
       },
-      this.timeoutMs
+      options.timeoutMs ?? this.timeoutMs
     );
 
     if (res.status === 401 && !isRetry) {
@@ -317,11 +317,34 @@ export class WibiClient {
     };
   }
 
-  post<T = unknown>(path: string, body?: unknown, query?: Record<string, unknown>): Promise<T> {
-    return this.request<T>("POST", path, { body, query });
+  post<T = unknown>(
+    path: string,
+    body?: unknown,
+    query?: Record<string, unknown>,
+    opts: { timeoutMs?: number } = {}
+  ): Promise<T> {
+    return this.request<T>("POST", path, { body, query, timeoutMs: opts.timeoutMs });
   }
 
-  patch<T = unknown>(path: string, body?: unknown, query?: Record<string, unknown>): Promise<T> {
-    return this.request<T>("PATCH", path, { body, query });
+  patch<T = unknown>(
+    path: string,
+    body?: unknown,
+    query?: Record<string, unknown>,
+    opts: { timeoutMs?: number } = {}
+  ): Promise<T> {
+    return this.request<T>("PATCH", path, { body, query, timeoutMs: opts.timeoutMs });
+  }
+
+  put<T = unknown>(
+    path: string,
+    body?: unknown,
+    query?: Record<string, unknown>,
+    opts: { timeoutMs?: number } = {}
+  ): Promise<T> {
+    return this.request<T>("PUT", path, { body, query, timeoutMs: opts.timeoutMs });
+  }
+
+  delete<T = unknown>(path: string, query?: Record<string, unknown>): Promise<T> {
+    return this.request<T>("DELETE", path, { query });
   }
 }

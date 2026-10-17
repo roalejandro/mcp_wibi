@@ -12,7 +12,7 @@
     "start": "node dist/index.js",
     "dev": "tsc --watch",
     "typecheck": "tsc --noEmit",
-    "test": "npm run build && node --test dist/http/oauthStore.test.js dist/http/oauthProvider.test.js dist/http/sessionRefresh.test.js dist/http/adminScope.test.js dist/http/invalidTokenResponse.test.js dist/http/mcpSession.test.js dist/tools/informesCampania.test.js dist/tools/informesRegistry.test.js dist/tools/informesMarcas.test.js dist/tools/informesDifusiones.test.js dist/tools/informesObjetivos.test.js dist/tools/informesMeta.test.js dist/tools/informesVentasDetalle.test.js dist/wibiClient.payload.test.js"
+    "test": "npm run build && node --test dist/http/oauthStore.test.js dist/http/oauthProvider.test.js dist/http/sessionRefresh.test.js dist/http/adminScope.test.js dist/http/invalidTokenResponse.test.js dist/http/mcpSession.test.js dist/tools/informesCampania.test.js dist/tools/informesRegistry.test.js dist/tools/informesMarcas.test.js dist/tools/informesDifusiones.test.js dist/tools/informesObjetivos.test.js dist/tools/informesMeta.test.js dist/tools/informesVentasDetalle.test.js dist/wibiClient.payload.test.js dist/tools/portal.test.js"
   },
   "engines": {
     "node": ">=18"

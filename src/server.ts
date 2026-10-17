@@ -15,6 +15,7 @@ import { registerDifusionesTools } from "./tools/difusiones.js";
 import { registerSuscripcionesTools } from "./tools/suscripciones.js";
 import { registerExportTools } from "./tools/export.js";
 import { registerTagsTools } from "./tools/tags.js";
+import { portalPermissionMap, registerPortalTools } from "./tools/portal.js";
 import { informesCampaniaPermissionMap, registerInformesCampaniaTools } from "./tools/informesCampania.js";
 import { informesMarcasPermissionMap, registerInformesMarcasTools } from "./tools/informesMarcas.js";
 import { informesDifusionesPermissionMap, registerInformesDifusionesTools } from "./tools/informesDifusiones.js";
@@ -228,6 +229,7 @@ export function buildMcpServer(client: WibiClient, opts: BuildServerOptions = {}
     ...informesObjetivosPermissionMap(),
     ...informesMetaPermissionMap(),
     ...informesVentasDetallePermissionMap(),
+    ...portalPermissionMap(),
   };
   const permissionedServer = new Proxy(server, {
     get(target, property, receiver) {
@@ -253,6 +255,10 @@ export function buildMcpServer(client: WibiClient, opts: BuildServerOptions = {}
   registerSuscripcionesTools(permissionedServer, client);
   registerExportTools(permissionedServer, client);
   registerTagsTools(permissionedServer, client);
+  // La configuración del portal sólo la acepta la API con sesión de administrador
+  if (opts.actor) {
+    registerPortalTools(permissionedServer, client);
+  }
 
   return server;
 }
