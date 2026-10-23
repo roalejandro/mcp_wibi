@@ -68,13 +68,19 @@ export function registerSuscripcionesTools(server: McpServer, client: WibiClient
     {
       title: "Crear suscripción",
       description:
-        "Crea una suscripción para un cliente (día del mes, tipo de alerta y productos opcionales). Valida cliente y tipo de alerta del comercio.",
+        "Crea una suscripción para un cliente. Mensual: dia del mes obligatorio. Cada 60 o 90 días: frecuenciaDias y fechaBase (YYYY-MM-DD); dia no se usa. Valida cliente y tipo de alerta del comercio.",
       inputSchema: {
         idCampania,
         idComercio,
         idCliente: z.number().int().positive(),
         idTipoAlerta: z.number().int().positive(),
-        dia: z.number().int().min(1).max(31),
+        dia: z.number().int().min(1).max(31).optional(),
+        frecuenciaDias: z.union([z.literal(60), z.literal(90)]).optional(),
+        fechaBase: z
+          .string()
+          .regex(/^\d{4}-\d{2}-\d{2}$/)
+          .optional()
+          .describe("Fecha de inicio del ciclo, obligatoria si frecuenciaDias es 60 o 90."),
         activo: z.boolean().optional(),
         notas: z.string().optional(),
         productos: z
@@ -90,16 +96,33 @@ export function registerSuscripcionesTools(server: McpServer, client: WibiClient
     },
     async (args) => {
       try {
+        const frecuencia = args.frecuenciaDias;
+        if (frecuencia === 60 || frecuencia === 90) {
+          if (!args.fechaBase) {
+            return errorResult(new Error("fechaBase es obligatoria para una frecuencia de 60 o 90 días"));
+          }
+        } else if (args.dia == null) {
+          return errorResult(new Error("dia es obligatorio para una suscripción mensual"));
+        }
+
+        const body: Record<string, unknown> = {
+          idCliente: args.idCliente,
+          idTipoAlerta: args.idTipoAlerta,
+          activo: args.activo,
+          notas: args.notas,
+          productos: args.productos ?? [],
+        };
+        if (args.dia != null) {
+          body.dia = args.dia;
+        }
+        if (frecuencia != null) {
+          body.frecuenciaDias = frecuencia;
+          body.fechaBase = args.fechaBase;
+        }
+
         const data = await client.post(
           "suscripciones",
-          {
-            idCliente: args.idCliente,
-            idTipoAlerta: args.idTipoAlerta,
-            dia: args.dia,
-            activo: args.activo,
-            notas: args.notas,
-            productos: args.productos ?? [],
-          },
+          body,
           scopeParams(client, args)
         );
         return jsonResult(data);
