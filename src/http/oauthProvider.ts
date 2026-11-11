@@ -10,6 +10,7 @@ import type { Response } from "express";
 import type { OAuthServerProvider, AuthorizationParams } from "@modelcontextprotocol/sdk/server/auth/provider.js";
 import type { OAuthRegisteredClientsStore } from "@modelcontextprotocol/sdk/server/auth/clients.js";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
+import { InvalidGrantError, InvalidTokenError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import type {
   OAuthClientInformationFull,
   OAuthTokens,
@@ -161,7 +162,7 @@ export class WibiOAuthProvider implements OAuthServerProvider {
     authorizationCode: string
   ): Promise<string> {
     const entry = this.authCodes.get(authorizationCode);
-    if (!entry) throw new Error("Authorization code inválido o expirado");
+    if (!entry) throw new InvalidGrantError("Authorization code inválido o expirado");
     return entry.codeChallenge;
   }
 
@@ -173,13 +174,13 @@ export class WibiOAuthProvider implements OAuthServerProvider {
     resource?: URL
   ): Promise<OAuthTokens> {
     const entry = this.authCodes.get(authorizationCode);
-    if (!entry) throw new Error("Authorization code inválido o expirado");
+    if (!entry) throw new InvalidGrantError("Authorization code inválido o expirado");
     this.authCodes.delete(authorizationCode);
 
-    if (entry.expiresAt < Date.now()) throw new Error("Authorization code expirado");
-    if (entry.clientId !== client.client_id) throw new Error("El código no pertenece a este cliente");
+    if (entry.expiresAt < Date.now()) throw new InvalidGrantError("Authorization code expirado");
+    if (entry.clientId !== client.client_id) throw new InvalidGrantError("El código no pertenece a este cliente");
     if (redirectUri && redirectUri !== entry.redirectUri) {
-      throw new Error("redirect_uri no coincide con el de la autorización");
+      throw new InvalidGrantError("redirect_uri no coincide con el de la autorización");
     }
 
     return this.issueTokens(
@@ -200,15 +201,15 @@ export class WibiOAuthProvider implements OAuthServerProvider {
     const entry = await this.store.getRefresh(key);
     if (!entry) {
       console.error("[wibi-mcp-gateway] refresh token inexistente");
-      throw new Error("Refresh token inválido");
+      throw new InvalidGrantError("Refresh token inválido");
     }
     if (entry.expiresAt < Date.now()) {
       await this.store.deleteRefresh(key);
       console.error("[wibi-mcp-gateway] refresh token expirado");
-      throw new Error("Refresh token expirado");
+      throw new InvalidGrantError("Refresh token expirado");
     }
     if (entry.clientId !== client.client_id) {
-      throw new Error("El refresh token no pertenece a este cliente");
+      throw new InvalidGrantError("El refresh token no pertenece a este cliente");
     }
 
     // Rotación: eliminar el refresh anterior (también limpia el índice de sesión).
@@ -234,12 +235,12 @@ export class WibiOAuthProvider implements OAuthServerProvider {
     const entry = await this.store.getAccess(key);
     if (!entry) {
       console.error("[wibi-mcp-gateway] access token inexistente");
-      throw new Error("Access token inválido");
+      throw new InvalidTokenError("Access token inválido");
     }
     if (entry.expiresAt < Date.now()) {
       await this.store.deleteAccess(key);
       console.error("[wibi-mcp-gateway] access token expirado");
-      throw new Error("Access token expirado");
+      throw new InvalidTokenError("Access token expirado");
     }
     const session = await this.resolveSession(entry.sessionId, entry.session);
     return {
@@ -290,7 +291,7 @@ export class WibiOAuthProvider implements OAuthServerProvider {
   private async resolveSession(sessionId: string, fallback?: WibiSession): Promise<WibiSession> {
     const current = await this.store.getSession(sessionId);
     if (current) return current;
-    if (!fallback) throw new Error("Access token inválido");
+    if (!fallback) throw new InvalidTokenError("Access token inválido");
     await this.store.setSession(sessionId, fallback, this.refreshTtlMs);
     logSessionEvent(sessionId, "migrate", "ok");
     return fallback;
