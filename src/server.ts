@@ -8,7 +8,15 @@ import { z } from "zod";
 import type { WibiClient } from "./wibiClient.js";
 import type { ActorInfo, CampaniaInfo, ComercioInfo } from "./wibiAuth.js";
 import { VERSION } from "./version.js";
-import { can, errorResult, jsonResult } from "./tools/helpers.js";
+import { errorResult, jsonResult } from "./tools/helpers.js";
+import { debeRegistrar, permisosAdmin } from "./tools/adminShared.js";
+import { registerPanelClientesTools } from "./tools/panelClientes.js";
+import { registerPanelMovimientosTools } from "./tools/panelMovimientos.js";
+import { registerPanelCatalogoTools } from "./tools/panelCatalogo.js";
+import { registerPanelOperacionTools } from "./tools/panelOperacion.js";
+import { registerTagsAdminTools } from "./tools/tags.js";
+import { registerDifusionesAdminTools } from "./tools/difusiones.js";
+import { registerSuscripcionesAdminTools } from "./tools/suscripciones.js";
 import { registerInformesTools } from "./tools/informes.js";
 import { registerComportamientoTools } from "./tools/comportamiento.js";
 import { registerDifusionesTools } from "./tools/difusiones.js";
@@ -230,15 +238,14 @@ export function buildMcpServer(client: WibiClient, opts: BuildServerOptions = {}
     ...informesMetaPermissionMap(),
     ...informesVentasDetallePermissionMap(),
     ...portalPermissionMap(),
+    ...permisosAdmin(),
   };
   const permissionedServer = new Proxy(server, {
     get(target, property, receiver) {
       if (property !== "registerTool") return Reflect.get(target, property, receiver);
       return (name: string, ...args: unknown[]) => {
-        const permission = toolPermissions[name];
-        if (!permission || can(opts.permisos, permission[0], permission[1], permission[2])) {
-          return (target.registerTool as (...toolArgs: unknown[]) => unknown)(name, ...args);
-        }
+        if (!debeRegistrar(name, opts.permisos, toolPermissions[name])) return;
+        return (target.registerTool as (...toolArgs: unknown[]) => unknown)(name, ...args);
       };
     },
   }) as McpServer;
@@ -255,12 +262,26 @@ export function buildMcpServer(client: WibiClient, opts: BuildServerOptions = {}
   registerSuscripcionesTools(permissionedServer, client);
   registerExportTools(permissionedServer, client);
   registerTagsTools(permissionedServer, client);
-  // La configuración del portal sólo la acepta la API con sesión de administrador
-  if (opts.actor) {
-    registerPortalTools(permissionedServer, client);
-  }
+  registrarHerramientasAdmin(permissionedServer, client, opts);
 
   return server;
+}
+
+/** Las herramientas del panel nuevo solo existen en una sesión administrativa. */
+export function registrarHerramientasAdmin(
+  server: McpServer,
+  client: WibiClient,
+  opts: BuildServerOptions
+): void {
+  if (!opts.actor) return;
+  registerPortalTools(server, client);
+  registerPanelClientesTools(server, client);
+  registerPanelMovimientosTools(server, client);
+  registerPanelCatalogoTools(server, client);
+  registerTagsAdminTools(server, client);
+  registerDifusionesAdminTools(server, client);
+  registerSuscripcionesAdminTools(server, client);
+  registerPanelOperacionTools(server, client, opts.permisos);
 }
 
 /** Alias de compatibilidad. */

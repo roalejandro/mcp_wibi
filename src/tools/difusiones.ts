@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { WibiClient } from "../wibiClient.js";
 import { errorResult, jsonResult, scopeParams } from "./helpers.js";
+import { DESTRUCTIVE, READONLY as LECTURA, ejecutar, idCampaniaObligatoria } from "./adminShared.js";
 
 const WRITE = {
   readOnlyHint: false,
@@ -185,4 +186,64 @@ export function registerDifusionesTools(server: McpServer, client: WibiClient): 
       }
     }
   );
+}
+
+/** Operaciones administrativas que no estaban en el listado original. */
+export function registerDifusionesAdminTools(server: McpServer, client: WibiClient): void {
+  const campania = { idCampania: idCampaniaObligatoria, idComercio };
+
+  server.registerTool("wibi_grilla_difusiones", {
+    title: "Grilla de difusiones",
+    description: "Devuelve la grilla administrativa de difusiones de la campaña.",
+    inputSchema: campania,
+    annotations: LECTURA,
+  }, async (args) => ejecutar(() => client.get("difusiones/grilla", scopeParams(client, args))));
+
+  server.registerTool("wibi_audiencia_difusion", {
+    title: "Audiencia de difusión",
+    description: "Calcula la audiencia por etiquetas incluidas y excluidas.",
+    inputSchema: {
+      ...campania,
+      tags: z.array(z.number().int().positive()).optional(),
+      excluir: z.array(z.number().int().positive()).optional(),
+      clientes: z.array(z.number().int().positive()).optional(),
+      soloSuscriptos: z.boolean().optional(),
+      soloActivos: z.boolean().optional(),
+    },
+    annotations: LECTURA,
+  }, async (args) => ejecutar(() => client.get("difusiones/audiencia", {
+    ...scopeParams(client, args),
+    tags: args.tags,
+    excluir: args.excluir,
+    clientes: args.clientes,
+    soloSuscriptos: args.soloSuscriptos ? "1" : undefined,
+    soloActivos: args.soloActivos ? "1" : undefined,
+  })));
+
+  server.registerTool("wibi_listar_plantillas_whatsapp", {
+    title: "Listar plantillas de WhatsApp",
+    description: "Lista las plantillas de WhatsApp disponibles para la campaña.",
+    inputSchema: campania,
+    annotations: LECTURA,
+  }, async (args) => ejecutar(() => client.get("difusiones/plantillas", scopeParams(client, args))));
+
+  const postEstado = (nombre: string, titulo: string, ruta: (id: number) => string) => {
+    server.registerTool(nombre, {
+      title: titulo,
+      description: titulo,
+      inputSchema: { ...campania, id: z.number().int().positive() },
+      annotations: DESTRUCTIVE,
+    }, async (args) => ejecutar(() => client.post(ruta(args.id), {}, scopeParams(client, args))));
+  };
+  postEstado("wibi_pausar_difusion", "Pausar difusión", (id) => `difusiones/${id}/pausar`);
+  postEstado("wibi_reanudar_difusion", "Reanudar difusión", (id) => `difusiones/${id}/reanudar`);
+  postEstado("wibi_pausar_detalle_difusion", "Pausar destinatario", (id) => `difusiones/detalles/${id}/pausar`);
+  postEstado("wibi_reanudar_detalle_difusion", "Reanudar destinatario", (id) => `difusiones/detalles/${id}/reanudar`);
+
+  server.registerTool("wibi_eliminar_difusion", {
+    title: "Eliminar difusión",
+    description: "Elimina una difusión de la campaña.",
+    inputSchema: { ...campania, id: z.number().int().positive() },
+    annotations: DESTRUCTIVE,
+  }, async (args) => ejecutar(() => client.delete(`difusiones/${args.id}`, scopeParams(client, args))));
 }

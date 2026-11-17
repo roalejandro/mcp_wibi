@@ -220,9 +220,16 @@ export class WibiClient {
     const url = new URL(`${this.baseUrl}/onzecrm/v2/${path.replace(/^\//, "")}`);
     if (options.query) {
       for (const [key, value] of Object.entries(options.query)) {
-        if (value !== undefined && value !== null && value !== "") {
-          url.searchParams.set(key, String(value));
+        if (value === undefined || value === null || value === "") continue;
+        if (Array.isArray(value)) {
+          for (const item of value) {
+            if (item !== undefined && item !== null && item !== "") {
+              url.searchParams.append(`${key}[]`, String(item));
+            }
+          }
+          continue;
         }
+        url.searchParams.set(key, String(value));
       }
     }
 
@@ -278,9 +285,16 @@ export class WibiClient {
     const token = await this.ensureToken();
     const url = new URL(`${this.baseUrl}/onzecrm/v2/${path.replace(/^\//, "")}`);
     for (const [key, value] of Object.entries(query ?? {})) {
-      if (value !== undefined && value !== null && value !== "") {
-        url.searchParams.set(key, String(value));
+      if (value === undefined || value === null || value === "") continue;
+      if (Array.isArray(value)) {
+        for (const item of value) {
+          if (item !== undefined && item !== null && item !== "") {
+            url.searchParams.append(`${key}[]`, String(item));
+          }
+        }
+        continue;
       }
+      url.searchParams.set(key, String(value));
     }
 
     const res = await this.fetchWithTimeout(

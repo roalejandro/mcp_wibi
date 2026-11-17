@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { WibiClient } from "../wibiClient.js";
 import { errorResult, jsonResult, scopeParams } from "./helpers.js";
+import { DESTRUCTIVE, ejecutar } from "./adminShared.js";
 
 const READONLY = {
   readOnlyHint: true,
@@ -146,5 +147,23 @@ export function registerTagsTools(server: McpServer, client: WibiClient): void {
         return errorResult(e);
       }
     }
+  );
+}
+
+/** Baja de etiquetas. Solo se registra en una sesión administrativa. */
+export function registerTagsAdminTools(server: McpServer, client: WibiClient): void {
+  server.registerTool(
+    "wibi_eliminar_tag",
+    {
+      title: "Eliminar etiqueta",
+      description: "Elimina una etiqueta de la campaña. No borra los clientes.",
+      inputSchema: {
+        idCampania: z.number().int().positive(),
+        idComercio,
+        idTag: z.number().int().positive(),
+      },
+      annotations: DESTRUCTIVE,
+    },
+    async (args) => ejecutar(() => client.delete(`tags/${args.idTag}`, scopeParams(client, args)))
   );
 }

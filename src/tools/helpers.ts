@@ -64,10 +64,14 @@ export function can(
   const actions = permisos[`${seccion}.${opcion}`] ?? [];
   if (actions.length === 0) return false;
 
-  const needed =
+  let needed =
     accion === "exportar" || accion === "imprimir" || accion === "exportar_detalle"
       ? "exportar"
       : accion;
+
+  if (needed === "activar" || needed === "desactivar" || needed === "editar" || needed === "toggle") {
+    needed = "modificar";
+  }
 
   if (needed === "consultar" || needed === "ver" || needed === "listar") {
     return (
