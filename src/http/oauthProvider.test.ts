@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import type { OAuthClientInformationFull } from "@modelcontextprotocol/sdk/shared/auth.js";
 import type { WibiSession } from "../wibiAuth.js";
 import { MemoryOAuthStore } from "./oauthStore.js";
-import { WibiOAuthProvider, hashToken } from "./oauthProvider.js";
+import { WibiOAuthProvider, hashToken, REFRESH_REUSE_GRACE_MS } from "./oauthProvider.js";
 
 function sampleSession(overrides: Partial<WibiSession> = {}): WibiSession {
   return {
@@ -70,7 +70,16 @@ describe("WibiOAuthProvider + MemoryOAuthStore", () => {
     assert.ok(rotated.refresh_token);
     assert.notEqual(rotated.refresh_token, tokens.refresh_token);
 
-    // El refresh anterior debe haber sido eliminado (rotación).
+    // Dentro de la ventana de gracia el refresh anterior sigue sirviendo
+    // (refresh concurrente de otra sesión del mismo conector).
+    const concurrente = await providerB.exchangeRefreshToken(client, tokens.refresh_token!);
+    assert.ok(concurrente.access_token);
+
+    // Vencida la gracia, el refresh anterior se rechaza.
+    const oldHash = hashToken(tokens.refresh_token!);
+    const oldEntry = await store.getRefresh(oldHash);
+    assert.ok(oldEntry?.rotatedAt);
+    await store.setRefresh(oldHash, { ...oldEntry!, expiresAt: Date.now() - 1 }, 1);
     await assert.rejects(
       () => providerB.exchangeRefreshToken(client, tokens.refresh_token!),
       /Refresh token inválido/
@@ -312,7 +321,7 @@ describe("WibiOAuthProvider + MemoryOAuthStore", () => {
     assert.equal((verified.extra as { session: WibiSession }).session.wibiToken, "jwt-wibi-1");
   });
 
-  it("rotación de refresh elimina el anterior y mantiene índice consistente", async () => {
+  it("rotación de refresh deja el anterior sólo durante la gracia, sin extenderla", async () => {
     const store = new MemoryOAuthStore();
     const provider = new WibiOAuthProvider(3600, store);
     const client = await registerClient(provider);
@@ -332,12 +341,20 @@ describe("WibiOAuthProvider + MemoryOAuthStore", () => {
       120_000
     );
 
+    const antes = Date.now();
     const tokens = await provider.exchangeRefreshToken(client, oldRefresh);
-    assert.equal(await store.getRefresh(hashToken(oldRefresh)), undefined);
+    const viejo = await store.getRefresh(hashToken(oldRefresh));
+    assert.ok(viejo?.rotatedAt);
+    assert.ok(viejo!.expiresAt <= Date.now() + REFRESH_REUSE_GRACE_MS);
+    assert.ok(viejo!.expiresAt >= antes);
     assert.ok(await store.getRefresh(hashToken(tokens.refresh_token!)));
+
+    // Un segundo uso dentro de la gracia no la extiende.
+    await provider.exchangeRefreshToken(client, oldRefresh);
+    const viejo2 = await store.getRefresh(hashToken(oldRefresh));
+    assert.equal(viejo2?.expiresAt, viejo!.expiresAt);
 
     const hashes = await store.listSessionRefreshHashes(sessionId);
     assert.ok(hashes.includes(hashToken(tokens.refresh_token!)));
-    assert.ok(!hashes.includes(hashToken(oldRefresh)));
   });
 });
