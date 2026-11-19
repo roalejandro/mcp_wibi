@@ -8,18 +8,27 @@ export const INVALID_TOKEN_BODY = JSON.stringify({
 /**
  * Si el refresh WIBI queda muerto durante el request, la respuesta HTTP sale
  * como 401 invalid_token. El SDK de MCP envolvería el fallo como resultado de tool.
+ *
+ * Sólo se reemplaza el cuerpo cuando también se pudo reemplazar el status. Una
+ * respuesta SSE ya manda el 200 `text/event-stream` antes de correr la tool: si
+ * ahí se pisara el evento con este JSON, el cliente no recibe nunca la respuesta
+ * JSON-RPC y queda colgado hasta su timeout. En ese caso el resultado de error
+ * de la tool pasa intacto y el siguiente request recibe el 401 (la sesión ya
+ * quedó revocada en el store).
  */
 export function installInvalidTokenOverride(
   res: Response,
   signal: { expired: boolean }
 ): void {
   const writeHead = res.writeHead.bind(res) as (...args: unknown[]) => unknown;
+  let headReplaced = false;
   let replaced = false;
 
   res.writeHead = ((status: number, headers?: unknown, ...rest: unknown[]) => {
     if (!signal.expired || res.headersSent) {
       return writeHead(status, headers, ...rest);
     }
+    headReplaced = true;
     const nextHeaders =
       headers && typeof headers === "object" && !Array.isArray(headers)
         ? { ...(headers as Record<string, unknown>) }
@@ -39,7 +48,7 @@ export function installInvalidTokenOverride(
 
   const write = res.write.bind(res) as (chunk: unknown, ...args: unknown[]) => unknown;
   res.write = ((chunk: unknown, ...args: unknown[]) => {
-    if (!signal.expired) return write(chunk, ...args);
+    if (!signal.expired || !headReplaced) return write(chunk, ...args);
     if (replaced) return true;
     replaced = true;
     return write(INVALID_TOKEN_BODY, ...args);
@@ -47,7 +56,7 @@ export function installInvalidTokenOverride(
 
   const end = res.end.bind(res) as (chunk?: unknown, ...args: unknown[]) => unknown;
   res.end = ((chunk?: unknown, ...args: unknown[]) => {
-    if (!signal.expired) return end(chunk, ...args);
+    if (!signal.expired || !headReplaced) return end(chunk, ...args);
     if (replaced) return end(undefined, ...args);
     replaced = true;
     return end(INVALID_TOKEN_BODY, ...args);

@@ -48,6 +48,21 @@ describe("installInvalidTokenOverride", () => {
     assert.equal(res.headers["Content-Length"], undefined);
   });
 
+  it("no pisa un stream SSE que ya mandó el 200 (si no, el cliente queda colgado)", () => {
+    const res = fakeResponse();
+    const signal = { expired: false };
+    installInvalidTokenOverride(res as unknown as Response, signal);
+
+    res.writeHead(200, { "Content-Type": "text/event-stream" });
+    signal.expired = true; // el refresh muere recién dentro de la tool
+    const evento = 'event: message\ndata: {"jsonrpc":"2.0","id":1,"result":{"isError":true}}\n\n';
+    res.write(evento);
+    res.end();
+
+    assert.equal(res.status, 200);
+    assert.equal(res.body, evento);
+  });
+
   it("no toca una respuesta sana", () => {
     const res = fakeResponse();
     installInvalidTokenOverride(res as unknown as Response, { expired: false });

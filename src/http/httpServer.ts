@@ -28,7 +28,7 @@ import { VERSION } from "../version.js";
 import { WibiOAuthProvider } from "./oauthProvider.js";
 import { createOauthStore } from "./oauthStore.js";
 import { createAdminScope } from "./adminScope.js";
-import { WibiSessionCoordinator } from "./sessionRefresh.js";
+import { needsWibiRefresh, WibiSessionCoordinator } from "./sessionRefresh.js";
 import { INVALID_TOKEN_BODY, installInvalidTokenOverride } from "./invalidTokenResponse.js";
 import { isWibiSessionExpired } from "../sessionErrors.js";
 import { resolveMcpSessionAction } from "./mcpSession.js";
@@ -437,6 +437,43 @@ export async function startHttpServer(
     return true;
   };
 
+  /**
+   * Renueva el JWT WIBI antes de entregar el request al transport. Las tools
+   * responden por SSE y el 200 sale antes de ejecutarlas: si el refresh falla
+   * recién adentro de la tool ya no se puede contestar 401 y el cliente no se
+   * entera de que tiene que volver a iniciar sesión. Acá todavía se puede.
+   * Devuelve false si ya respondió (401 sesión muerta / 503 WIBI no responde).
+   */
+  const preflightWibiSession = async (req: Request, res: Response): Promise<boolean> => {
+    const session = req.auth?.extra?.session as WibiSession | undefined;
+    const ownerSessionId = req.auth?.extra?.sessionId as string | undefined;
+    if (!session || !ownerSessionId || !needsWibiRefresh(session)) return true;
+    try {
+      await sessionRefresh.refresh(ownerSessionId);
+      return true;
+    } catch (err) {
+      if (!isWibiSessionExpired(err)) {
+        // Transitorio (red/timeout/5xx): cortar acá. Si siguiera, la tool volvería a
+        // intentar el refresh y la espera se duplicaría. La sesión sigue viva.
+        console.error("[wibi-mcp-gateway] refresh WIBI transitorio en preflight:", (err as Error)?.message);
+        if (!res.headersSent) {
+          const id = (req.body && !Array.isArray(req.body) && req.body.id !== undefined) ? req.body.id : null;
+          res.status(503).json({
+            jsonrpc: "2.0",
+            error: { code: -32603, message: "WIBI no respondió al renovar la sesión. Reintentá en unos segundos." },
+            id,
+          });
+        }
+        return false;
+      }
+      if (!res.headersSent) {
+        res.setHeader("WWW-Authenticate", 'Bearer error="invalid_token"');
+        res.status(401).type("json").send(INVALID_TOKEN_BODY);
+      }
+      return false;
+    }
+  };
+
   app.post(
     "/mcp",
     mcpLimiter,
@@ -447,6 +484,7 @@ export async function startHttpServer(
       installInvalidTokenOverride(res, signal);
       await sessionSignals.run(signal, async () => {
       try {
+        if (!(await preflightWibiSession(req, res))) return;
         const sessionId = req.headers["mcp-session-id"] as string | undefined;
         let bound: BoundTransport | undefined = sessionId ? transports[sessionId] : undefined;
 

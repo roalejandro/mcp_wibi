@@ -100,6 +100,11 @@ function isFresh(session: WibiSession): boolean {
   return Date.now() < session.tokenExpiryMs - REFRESH_SKEW_MS;
 }
 
+/** El JWT WIBI de la sesión vence (o venció) y la próxima llamada lo va a renovar. */
+export function needsWibiRefresh(session: WibiSession): boolean {
+  return !isFresh(session);
+}
+
 export function mergeRefreshedSession(current: WibiSession, refreshed: WibiSession): WibiSession {
   return {
     ...current,
