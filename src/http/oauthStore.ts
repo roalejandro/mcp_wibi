@@ -23,6 +23,8 @@ export interface StoredRefreshToken {
   session: WibiSession;
   expiresAt: number;
   sessionId: string;
+  /** Momento en que ya se rotó: sólo sigue sirviendo dentro de la ventana de gracia. */
+  rotatedAt?: number;
 }
 
 export interface OAuthTokenStore {

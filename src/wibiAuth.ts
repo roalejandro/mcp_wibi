@@ -18,8 +18,23 @@
  * POST /onzecrm/v2/auth/switch-scope        (Bearer)
  */
 
+import { createHash } from "node:crypto";
 import type { ConnectionConfig } from "./config.js";
 import type { TokenBundle } from "./wibiClient.js";
+
+/** Esperas entre reintentos del refresh ante errores transitorios (red/timeout/5xx). */
+export const REFRESH_RETRY_DELAYS_MS = [1_000, 3_000];
+
+/**
+ * request_id determinístico por refresh token (formato UUID v4).
+ * WIBI rota el refresh al recibirlo: si la respuesta se pierde, reintentar con
+ * el mismo request_id devuelve la misma sesión (replay) en vez de "token inválido".
+ */
+export function refreshRequestId(refreshToken: string): string {
+  const h = createHash("sha256").update(`wibi-mcp-refresh:${refreshToken}`).digest("hex");
+  const variant = ((parseInt(h[16], 16) & 0x3) | 0x8).toString(16);
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-${variant}${h.slice(17, 20)}-${h.slice(20, 32)}`;
+}
 
 export interface CampaniaInfo {
   idCampania: number;
@@ -69,7 +84,7 @@ export type SignInResult =
 
 export type ApiResult<T> =
   | { kind: "ok"; data: T }
-  | { kind: "error"; message: string };
+  | { kind: "error"; message: string; transient?: boolean };
 
 export class WibiAuthService {
   constructor(private readonly conn: ConnectionConfig) {}
@@ -139,12 +154,23 @@ export class WibiAuthService {
     );
   }
 
-  async refresh(refreshToken: string): Promise<SignInResult> {
-    return this.parseAuthResponse(
-      await this.requestJson("/onzecrm/v2/auth/refresh", {
-        refresh_token: refreshToken,
-      })
-    );
+  async refresh(refreshToken: string, delaysMs: number[] = REFRESH_RETRY_DELAYS_MS): Promise<SignInResult> {
+    const body: Record<string, string> = {
+      refresh_token: refreshToken,
+      request_id: refreshRequestId(refreshToken),
+    };
+    let result = await this.requestJson("/onzecrm/v2/auth/refresh", body);
+    for (let i = 0; i < delaysMs.length && result.kind === "error" && result.transient; i++) {
+      if (/MCP_REFRESH_CACHE_DRIVER/.test(result.message)) {
+        // API sin store durable para el modo idempotente: volver al refresh simple.
+        delete body.request_id;
+        result = await this.requestJson("/onzecrm/v2/auth/refresh", body);
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, delaysMs[i]));
+      result = await this.requestJson("/onzecrm/v2/auth/refresh", body);
+    }
+    return this.parseAuthResponse(result);
   }
 
   async revoke(refreshToken: string): Promise<void> {
@@ -402,7 +428,7 @@ export class WibiAuthService {
         (err as Error)?.name === "AbortError"
           ? "Timeout al contactar WIBI"
           : "No se pudo contactar WIBI";
-      return { kind: "error", message: msg };
+      return { kind: "error", message: msg, transient: true };
     } finally {
       clearTimeout(timeout);
     }
@@ -418,7 +444,7 @@ export class WibiAuthService {
     if (!response.ok || data?.success === false) {
       const message =
         data?.error || data?.message || "Credenciales inválidas o sin acceso.";
-      return { kind: "error", message: String(message) };
+      return { kind: "error", message: String(message), transient: response.status >= 500 };
     }
 
     return { kind: "ok", data: data?.data ?? data ?? {} };

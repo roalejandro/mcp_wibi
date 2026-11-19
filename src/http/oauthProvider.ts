@@ -26,6 +26,14 @@ import { logSessionEvent } from "./sessionLog.js";
 const AUTH_CODE_TTL_MS = 5 * 60 * 1000;
 const AUTH_REQUEST_TTL_MS = 10 * 60 * 1000;
 const DEFAULT_SCOPES = ["mcp"];
+/** Vida del refresh OAuth (deslizante: se renueva en cada rotación). */
+const REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+/**
+ * Tolerancia para reusar un refresh recién rotado. Varias sesiones del mismo
+ * conector (p. ej. tareas programadas solapadas) refrescan el mismo token casi
+ * a la vez: sin gracia la segunda recibe invalid_grant y el cliente pide login.
+ */
+export const REFRESH_REUSE_GRACE_MS = 2 * 60 * 1000;
 const MAX_ENTRIES = 5_000;
 
 function token(bytes = 32): string {
@@ -72,8 +80,8 @@ export class WibiOAuthProvider implements OAuthServerProvider {
     store?: OAuthTokenStore
   ) {
     this.store = store ?? new MemoryOAuthStore();
-    // Refresh OAuth al menos tan largo como el access OAuth, máx 7 días.
-    this.refreshTtlMs = Math.max(accessTokenTtlSeconds * 1000, 7 * 24 * 60 * 60 * 1000);
+    // Refresh OAuth al menos tan largo como el access OAuth (30 días deslizantes).
+    this.refreshTtlMs = Math.max(accessTokenTtlSeconds * 1000, REFRESH_TTL_MS);
     setInterval(() => this.cleanup(), 5 * 60 * 1000).unref?.();
   }
 
@@ -212,8 +220,20 @@ export class WibiOAuthProvider implements OAuthServerProvider {
       throw new InvalidGrantError("El refresh token no pertenece a este cliente");
     }
 
-    // Rotación: eliminar el refresh anterior (también limpia el índice de sesión).
-    await this.store.deleteRefresh(key);
+    // Rotación con gracia: el refresh anterior queda vivo REFRESH_REUSE_GRACE_MS
+    // (sin extenderse si ya estaba rotado) para que un refresh concurrente
+    // de otra sesión del mismo conector no reciba invalid_grant.
+    if (entry.rotatedAt === undefined) {
+      const now = Date.now();
+      const graceUntil = Math.min(entry.expiresAt, now + REFRESH_REUSE_GRACE_MS);
+      await this.store.setRefresh(
+        key,
+        { ...entry, rotatedAt: now, expiresAt: graceUntil },
+        Math.max(1, graceUntil - now)
+      );
+    } else {
+      console.error("[wibi-mcp-gateway] refresh reusado dentro de la ventana de gracia");
+    }
 
     const grantedScopes = scopes && scopes.length > 0
       ? scopes.filter((s) => s === "mcp")
