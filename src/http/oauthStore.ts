@@ -55,6 +55,11 @@ export interface OAuthTokenStore {
   getSession(sessionId: string): Promise<WibiSession | undefined>;
   getSessionExpiresAt(sessionId: string): Promise<number | undefined>;
   setSession(sessionId: string, session: WibiSession, ttlMs: number): Promise<void>;
+  /**
+   * Extiende la expiración de una sesión existente sin modificar su contenido.
+   * Devuelve false si ya no existe o venció.
+   */
+  touchSession(sessionId: string, ttlMs: number): Promise<boolean>;
   deleteSession(sessionId: string): Promise<void>;
   revokeSession(sessionId: string): Promise<void>;
 
@@ -94,6 +99,26 @@ const CLIENTS_INDEX = `${PREFIX}:clients`;
 function ttlSecondsFromMs(ttlMs: number): number {
   return Math.max(1, Math.ceil(ttlMs / 1000));
 }
+
+/**
+ * Cambia solo el expiresAt final y el TTL de Redis.
+ * No re-codifica el JSON, así una escritura concurrente más nueva no se pierde
+ * ni se altera el contenido de la sesión.
+ */
+const TOUCH_SESSION_LUA = `
+local raw = redis.call('GET', KEYS[1])
+if not raw then return 0 end
+local current = string.match(raw, '"expiresAt":(%d+)}$')
+if not current then return 0 end
+if tonumber(current) < tonumber(ARGV[1]) then
+  redis.call('DEL', KEYS[1])
+  return 0
+end
+local updated, count = string.gsub(raw, '"expiresAt":%d+}$', '"expiresAt":' .. ARGV[2] .. '}')
+if count ~= 1 then return 0 end
+redis.call('SET', KEYS[1], updated, 'EX', tonumber(ARGV[3]))
+return 1
+`;
 
 function enforceMapCap<K, V>(map: Map<K, V>): void {
   if (map.size < MAX_MEMORY_ENTRIES) return;
@@ -232,6 +257,16 @@ export class MemoryOAuthStore implements OAuthTokenStore {
       session,
       expiresAt: Date.now() + Math.max(1, ttlMs),
     });
+  }
+
+  async touchSession(sessionId: string, ttlMs: number): Promise<boolean> {
+    const stored = this.sessions.get(sessionId);
+    if (!stored || stored.expiresAt < Date.now()) {
+      if (stored) this.sessions.delete(sessionId);
+      return false;
+    }
+    stored.expiresAt = Date.now() + Math.max(1, ttlMs);
+    return true;
   }
 
   async deleteSession(sessionId: string): Promise<void> {
@@ -436,6 +471,16 @@ export class RedisOAuthStore implements OAuthTokenStore {
     await this.client.set(sessionKey(sessionId), JSON.stringify(stored), {
       EX: ttlSecondsFromMs(ttlMs),
     });
+  }
+
+  async touchSession(sessionId: string, ttlMs: number): Promise<boolean> {
+    const ttlSec = ttlSecondsFromMs(ttlMs);
+    const expiresAt = Date.now() + ttlSec * 1000;
+    const updated = await this.client.eval(TOUCH_SESSION_LUA, {
+      keys: [sessionKey(sessionId)],
+      arguments: [String(Date.now()), String(expiresAt), String(ttlSec)],
+    });
+    return Number(updated) === 1;
   }
 
   async deleteSession(sessionId: string): Promise<void> {

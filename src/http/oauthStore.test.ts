@@ -2,7 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import type { WibiSession } from "../wibiAuth.js";
-import { MemoryOAuthStore, createOauthStore } from "./oauthStore.js";
+import { MemoryOAuthStore, RedisOAuthStore, createOauthStore } from "./oauthStore.js";
 
 function sampleSession(overrides: Partial<WibiSession> = {}): WibiSession {
   return {
@@ -114,6 +114,23 @@ describe("MemoryOAuthStore", () => {
     assert.equal(await store.getRefresh("refresh-hash"), undefined);
   });
 
+  it("touchSession extiende el vencimiento sin cambiar la sesión", async () => {
+    const store = new MemoryOAuthStore();
+    const sessionId = randomUUID();
+    const session = sampleSession({ refreshToken: "R1", wibiToken: "jwt-1" });
+    await store.setSession(sessionId, session, 5_000);
+    const before = await store.getSessionExpiresAt(sessionId);
+
+    assert.equal(await store.touchSession(sessionId, 60_000), true);
+    const after = await store.getSession(sessionId);
+    assert.equal(after?.refreshToken, "R1");
+    assert.equal(after?.wibiToken, "jwt-1");
+    assert.ok((await store.getSessionExpiresAt(sessionId))! > before!);
+
+    await store.deleteSession(sessionId);
+    assert.equal(await store.touchSession(sessionId, 60_000), false);
+  });
+
   it("persiste clientes DCR", async () => {
     const store = new MemoryOAuthStore();
     const clientId = randomUUID();
@@ -126,6 +143,31 @@ describe("MemoryOAuthStore", () => {
     assert.ok(got);
     assert.equal(got.client_id, clientId);
     assert.deepEqual(await store.listClientIds(), [clientId]);
+  });
+});
+
+describe("RedisOAuthStore", () => {
+  const redisUrl = process.env.REDIS_URL;
+
+  it("touchSession preserva el contenido y extiende el TTL", { skip: redisUrl ? false : "definí REDIS_URL para ejercitar Redis" }, async () => {
+    if (!redisUrl) return;
+    const store = new RedisOAuthStore(redisUrl);
+    await store.connect();
+    const sessionId = randomUUID();
+    try {
+      await store.setSession(sessionId, sampleSession({ refreshToken: "R1", wibiToken: "jwt-1" }), 5_000);
+      await store.setSession(sessionId, sampleSession({ refreshToken: "R2", wibiToken: "jwt-2" }), 5_000);
+      assert.equal(await store.touchSession(sessionId, 60_000), true);
+      const session = await store.getSession(sessionId);
+      assert.equal(session?.refreshToken, "R2");
+      assert.equal(session?.wibiToken, "jwt-2");
+      const expiresAt = await store.getSessionExpiresAt(sessionId);
+      assert.ok(expiresAt && expiresAt > Date.now() + 30_000);
+      await store.deleteSession(sessionId);
+      assert.equal(await store.touchSession(sessionId, 60_000), false);
+    } finally {
+      await store.close();
+    }
   });
 });
 

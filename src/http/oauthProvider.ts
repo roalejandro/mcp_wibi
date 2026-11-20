@@ -220,6 +220,11 @@ export class WibiOAuthProvider implements OAuthServerProvider {
       throw new InvalidGrantError("El refresh token no pertenece a este cliente");
     }
 
+    const canonical = await this.store.getSession(entry.sessionId);
+    if (!canonical) {
+      throw new InvalidGrantError("Refresh token inválido");
+    }
+
     // Rotación con gracia: el refresh anterior queda vivo REFRESH_REUSE_GRACE_MS
     // (sin extenderse si ya estaba rotado) para que un refresh concurrente
     // de otra sesión del mismo conector no reciba invalid_grant.
@@ -239,12 +244,11 @@ export class WibiOAuthProvider implements OAuthServerProvider {
       ? scopes.filter((s) => s === "mcp")
       : entry.scopes;
     const finalScopes = grantedScopes.length > 0 ? grantedScopes : DEFAULT_SCOPES;
-    const session = await this.resolveSession(entry.sessionId, entry.session);
 
     return this.issueTokens(
       client.client_id,
       finalScopes,
-      session,
+      canonical,
       resource?.href ?? entry.resource,
       entry.sessionId
     );
@@ -361,7 +365,12 @@ export class WibiOAuthProvider implements OAuthServerProvider {
     const refreshExpiresAt = Date.now() + this.refreshTtlMs;
     const accessTtlMs = this.accessTokenTtlSeconds * 1000;
 
-    await this.store.setSession(sessionId, session, this.refreshTtlMs);
+    if (existingSessionId) {
+      const extended = await this.store.touchSession(existingSessionId, this.refreshTtlMs);
+      if (!extended) throw new InvalidGrantError("Refresh token inválido");
+    } else {
+      await this.store.setSession(sessionId, session, this.refreshTtlMs);
+    }
     await this.store.setAccess(
       hashToken(accessToken),
       {

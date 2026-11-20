@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import type { OAuthClientInformationFull } from "@modelcontextprotocol/sdk/shared/auth.js";
 import type { WibiSession } from "../wibiAuth.js";
-import { MemoryOAuthStore } from "./oauthStore.js";
+import { MemoryOAuthStore, type OAuthTokenStore } from "./oauthStore.js";
 import { WibiOAuthProvider, hashToken, REFRESH_REUSE_GRACE_MS } from "./oauthProvider.js";
 
 function sampleSession(overrides: Partial<WibiSession> = {}): WibiSession {
@@ -296,6 +296,7 @@ describe("WibiOAuthProvider + MemoryOAuthStore", () => {
       },
       1_000
     );
+    await store.setSession(sessionId, session, 7 * 24 * 60 * 60 * 1000);
     await store.setRefresh(
       hashToken(refreshRaw),
       {
@@ -321,6 +322,75 @@ describe("WibiOAuthProvider + MemoryOAuthStore", () => {
     assert.equal((verified.extra as { session: WibiSession }).session.wibiToken, "jwt-wibi-1");
   });
 
+  it("el refresh OAuth no pisa un refresh Wibi guardado después de leer la sesión", async () => {
+    const inner = new MemoryOAuthStore();
+    let sawStaleRead = false;
+    const store = new Proxy(inner, {
+      get(target, prop, receiver) {
+        if (prop === "getSession") {
+          return async (sessionId: string) => {
+            const session = await target.getSession(sessionId);
+            if (session?.refreshToken === "R1") sawStaleRead = true;
+            return session;
+          };
+        }
+        if (prop === "setSession") {
+          return async (sessionId: string, session: WibiSession, ttlMs: number) => {
+            if (sawStaleRead && session.refreshToken === "R1") {
+              sawStaleRead = false;
+              const newer = sampleSession({ refreshToken: "R2", wibiToken: "jwt-2" });
+              await target.setSession(sessionId, newer, ttlMs);
+            }
+            return target.setSession(sessionId, session, ttlMs);
+          };
+        }
+        if (prop === "touchSession") {
+          return async (sessionId: string, ttlMs: number) => {
+            if (sawStaleRead) {
+              sawStaleRead = false;
+              const current = await target.getSession(sessionId);
+              await target.setSession(
+                sessionId,
+                sampleSession({ ...current, refreshToken: "R2", wibiToken: "jwt-2" }),
+                ttlMs
+              );
+            }
+            const touch = (target as MemoryOAuthStore & {
+              touchSession?(sessionId: string, ttlMs: number): Promise<boolean>;
+            }).touchSession;
+            if (!touch) throw new Error("touchSession no existe");
+            return touch.call(target, sessionId, ttlMs);
+          };
+        }
+        const value = Reflect.get(target, prop, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as OAuthTokenStore;
+
+    const provider = new WibiOAuthProvider(3600, store);
+    const client = await registerClient(provider);
+    const sessionId = randomUUID();
+    const session = sampleSession({ refreshToken: "R1", wibiToken: "jwt-1" });
+    await inner.setSession(sessionId, session, 60_000);
+    await inner.setRefresh(
+      hashToken("oauth-refresh"),
+      {
+        clientId: client.client_id,
+        scopes: ["mcp"],
+        session,
+        expiresAt: Date.now() + 120_000,
+        sessionId,
+      },
+      120_000
+    );
+
+    await provider.exchangeRefreshToken(client, "oauth-refresh");
+
+    const canonical = await inner.getSession(sessionId);
+    assert.equal(canonical?.refreshToken, "R2");
+    assert.equal(canonical?.wibiToken, "jwt-2");
+  });
+
   it("rotación de refresh deja el anterior sólo durante la gracia, sin extenderla", async () => {
     const store = new MemoryOAuthStore();
     const provider = new WibiOAuthProvider(3600, store);
@@ -329,6 +399,7 @@ describe("WibiOAuthProvider + MemoryOAuthStore", () => {
     const oldRefresh = "old-refresh-token";
     const session = sampleSession();
 
+    await store.setSession(sessionId, session, 120_000);
     await store.setRefresh(
       hashToken(oldRefresh),
       {
@@ -356,5 +427,34 @@ describe("WibiOAuthProvider + MemoryOAuthStore", () => {
 
     const hashes = await store.listSessionRefreshHashes(sessionId);
     assert.ok(hashes.includes(hashToken(tokens.refresh_token!)));
+    assert.ok(hashes.includes(hashToken(oldRefresh)));
+  });
+
+  it("el refresh OAuth no recrea una sesión canónica ausente", async () => {
+    const store = new MemoryOAuthStore();
+    const provider = new WibiOAuthProvider(3600, store);
+    const client = await registerClient(provider);
+    const sessionId = randomUUID();
+    const refreshRaw = "refresh-sin-sesion";
+
+    await store.setRefresh(
+      hashToken(refreshRaw),
+      {
+        clientId: client.client_id,
+        scopes: ["mcp"],
+        session: sampleSession(),
+        expiresAt: Date.now() + 120_000,
+        sessionId,
+      },
+      120_000
+    );
+
+    await assert.rejects(
+      () => provider.exchangeRefreshToken(client, refreshRaw),
+      /Refresh token inválido/
+    );
+    assert.equal(await store.getSession(sessionId), undefined);
+    const kept = await store.getRefresh(hashToken(refreshRaw));
+    assert.equal(kept?.rotatedAt, undefined);
   });
 });
